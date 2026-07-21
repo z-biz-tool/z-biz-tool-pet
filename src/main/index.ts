@@ -1,5 +1,7 @@
-import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain } from 'electron';
+import { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, desktopCapturer, screen } from 'electron';
 import * as path from 'path';
+import * as fs from 'fs';
+import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 
 const isDev = process.env.NODE_ENV !== 'production' && !app.isPackaged;
 console.log('[Z-Bot Main] 应用启动...');
@@ -8,6 +10,18 @@ console.log('[Z-Bot Main] 是否开发模式:', isDev);
 let adminWindow: BrowserWindow | null = null;
 let petWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
+let sttServer: ChildProcessWithoutNullStreams | null = null;
+let ttsServer: ChildProcessWithoutNullStreams | null = null;
+
+interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: Date;
+}
+
+let conversationHistory: ChatMessage[] = [];
+const MAX_HISTORY_LENGTH = 20;
 
 function createAdminWindow() {
   adminWindow = new BrowserWindow({
@@ -78,6 +92,55 @@ function createPetWindow() {
       petWindow?.hide();
     }
   });
+}
+
+function startSTTServer() {
+  console.log('[Z-Bot Main] 启动 STT 服务器...');
+  const sttScript = path.join(__dirname, '../../server/stt.js');
+  sttServer = spawn('node', [sttScript]);
+  
+  sttServer.stdout.on('data', (data) => {
+    console.log('[STT Server]', data.toString().trim());
+  });
+  
+  sttServer.stderr.on('data', (data) => {
+    console.error('[STT Server Error]', data.toString().trim());
+  });
+  
+  sttServer.on('close', (code) => {
+    console.log('[Z-Bot Main] STT 服务器关闭，退出码:', code);
+  });
+}
+
+function startTTSServer() {
+  console.log('[Z-Bot Main] 启动 TTS 服务器...');
+  const ttsScript = path.join(__dirname, '../../server/tts.js');
+  ttsServer = spawn('node', [ttsScript]);
+  
+  ttsServer.stdout.on('data', (data) => {
+    console.log('[TTS Server]', data.toString().trim());
+  });
+  
+  ttsServer.stderr.on('data', (data) => {
+    console.error('[TTS Server Error]', data.toString().trim());
+  });
+  
+  ttsServer.on('close', (code) => {
+    console.log('[Z-Bot Main] TTS 服务器关闭，退出码:', code);
+  });
+}
+
+function stopServers() {
+  if (sttServer) {
+    console.log('[Z-Bot Main] 关闭 STT 服务器...');
+    sttServer.kill();
+    sttServer = null;
+  }
+  if (ttsServer) {
+    console.log('[Z-Bot Main] 关闭 TTS 服务器...');
+    ttsServer.kill();
+    ttsServer = null;
+  }
 }
 
 function createTray() {
@@ -157,7 +220,58 @@ ipcMain.handle('app:getMode', async () => {
   return adminWindow?.isVisible() ? 'admin' : 'pet';
 });
 
+ipcMain.handle('screenshot:capture', async () => {
+  console.log('[Z-Bot Main] 开始截图...');
+  try {
+    const displays = screen.getAllDisplays();
+    const allSources = await desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize: { width: 1920, height: 1080 },
+    });
+
+    const mainSource = allSources[0];
+    if (!mainSource || !mainSource.thumbnail) {
+      console.error('[Z-Bot Main] 无法获取屏幕截图');
+      return { success: false, error: '无法获取屏幕截图' };
+    }
+
+    const imageBuffer = mainSource.thumbnail.toPNG();
+    const tempDir = app.getPath('temp');
+    const screenshotPath = path.join(tempDir, `zbot_screenshot_${Date.now()}.png`);
+    
+    fs.writeFileSync(screenshotPath, imageBuffer);
+    console.log('[Z-Bot Main] 截图保存成功:', screenshotPath);
+    
+    return { success: true, path: screenshotPath };
+  } catch (error: any) {
+    console.error('[Z-Bot Main] 截图失败:', error.message);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('conversation:getHistory', async () => {
+  console.log('[Z-Bot Main] 获取对话历史，共', conversationHistory.length, '条');
+  return conversationHistory;
+});
+
+ipcMain.handle('conversation:addMessage', async (_, message: ChatMessage) => {
+  console.log('[Z-Bot Main] 添加消息:', message.role, message.content.slice(0, 30));
+  conversationHistory.push(message);
+  if (conversationHistory.length > MAX_HISTORY_LENGTH) {
+    conversationHistory = conversationHistory.slice(-MAX_HISTORY_LENGTH);
+  }
+  return conversationHistory.length;
+});
+
+ipcMain.handle('conversation:clear', async () => {
+  console.log('[Z-Bot Main] 清空对话历史');
+  conversationHistory = [];
+  return true;
+});
+
 app.whenReady().then(() => {
+  startSTTServer();
+  startTTSServer();
   createAdminWindow();
   createPetWindow();
   createTray();
@@ -171,12 +285,14 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
+    stopServers();
     app.quit();
   }
 });
 
 app.on('before-quit', () => {
   app.isQuitting = true;
+  stopServers();
 });
 
 declare global {

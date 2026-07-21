@@ -92,7 +92,7 @@ app.post('/transcribe', (req, res) => {
   });
 });
 
-const PORT = 8083;
+const PORT = 8084;
 app.listen(PORT, () => {
   console.log(`[STT Server] Running on http://localhost:${PORT}`);
 });

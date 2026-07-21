@@ -17,27 +17,23 @@ app.post('/speak', async (req, res) => {
 
   console.log('[TTS] Speaking:', text.slice(0, 50));
 
-  // Create temp file for audio
   const tempPath = path.join(__dirname, 'temp_speech.mp3');
 
-  // Use edge-tts to generate speech
   const python = spawn('python3', [
-    '-c',
-    `
-import asyncio
-import edge_tts
-import base64
-
-async def speak():
-    communicate = edge_tts.Communicator("${text.replace(/"/g, '\\"')}", "zh-CN-XiaoxiaoNeural")
-    await communicate.save("${tempPath}")
-    print("done")
-
-asyncio.run(speak())
-`
+    path.join(__dirname, 'tts_local.py'),
+    tempPath
   ]);
 
   let error = '';
+  let output = '';
+
+  python.stdin.write(text);
+  python.stdin.end();
+
+  python.stdout.on('data', (data) => {
+    output += data.toString();
+  });
+
   python.stderr.on('data', (data) => {
     error += data.toString();
   });
@@ -45,7 +41,7 @@ asyncio.run(speak())
   python.on('close', (code) => {
     if (code !== 0) {
       console.error('[TTS] Error:', error);
-      return res.status(500).json({ error: 'TTS failed' });
+      return res.status(500).json({ error: 'TTS failed', details: error });
     }
 
     try {
@@ -60,7 +56,7 @@ asyncio.run(speak())
   });
 });
 
-const PORT = 8085;
+const PORT = 8086;
 app.listen(PORT, () => {
   console.log(`[TTS Server] Running on http://localhost:${PORT}`);
 });

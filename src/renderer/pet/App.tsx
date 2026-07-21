@@ -1,16 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-
-declare global {
-  interface Window {
-    electronAPI: {
-      toggleWindow: (mode: 'admin' | 'pet') => Promise<void>;
-      getMode: () => Promise<'admin' | 'pet'>;
-      onVoiceStart: (callback: () => void) => () => void;
-      onVoiceStop: (callback: () => void) => () => void;
-      log: (msg: string) => void;
-    };
-  }
-}
+import { SYSTEM_PROMPT, MODEL_NAME } from '../shared/prompts';
 
 const log = (msg: string) => {
   console.log(msg);
@@ -20,6 +9,7 @@ const log = (msg: string) => {
 function App() {
   const [status, setStatus] = useState<'idle' | 'recording' | 'thinking' | 'speaking'>('idle');
   const [lastMessage, setLastMessage] = useState('');
+  const [showScreenshotHint, setShowScreenshotHint] = useState(false);
   const petRef = useRef<HTMLDivElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -84,10 +74,25 @@ function App() {
     }
   };
 
+  const captureAndAnalyzeScreen = async () => {
+    log('[Z-Bot Pet] 开始截图分析...');
+    try {
+      const result = await window.electronAPI?.captureScreenshot();
+      if (result?.success && result.path) {
+        log('[Z-Bot Pet] 截图成功: ' + result.path);
+        setShowScreenshotHint(true);
+        setTimeout(() => setShowScreenshotHint(false), 3000);
+      } else {
+        log('[Z-Bot Pet] 截图失败: ' + result?.error);
+      }
+    } catch (error: any) {
+      log('[Z-Bot Pet] 截图错误: ' + error.message);
+    }
+  };
+
   const processAudio = async (audioBlob: Blob) => {
     setStatus('thinking');
 
-    // Convert to base64
     const reader = new FileReader();
     reader.onload = async () => {
       const base64 = (reader.result as string).split(',')[1];
@@ -95,7 +100,6 @@ function App() {
       log('[Z-Bot Pet] 发送音频到 STT 服务...');
 
       try {
-        log('[Z-Bot Pet] 开始 fetch...');
         const response = await fetch('http://localhost:8084/transcribe', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -134,8 +138,11 @@ function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'qwen2.5:7b-instruct-q4_K_M',
-          messages: [{ role: 'user', content: text }],
+          model: MODEL_NAME,
+          messages: [
+            { role: 'system', content: SYSTEM_PROMPT },
+            { role: 'user', content: text },
+          ],
           stream: false,
         }),
       });
@@ -153,8 +160,6 @@ function App() {
       log('[Z-Bot Pet] ollama 响应: ' + reply.slice(0, 50));
       setLastMessage(reply);
 
-      // TTS 播放
-      log('[Z-Bot Pet] 开始 TTS 播放');
       setStatus('speaking');
       try {
         const ttsResponse = await fetch('http://localhost:8086/speak', {
@@ -214,78 +219,122 @@ function App() {
     }
   };
 
+  const handleLongPress = () => {
+    if (status === 'idle') {
+      captureAndAnalyzeScreen();
+    }
+  };
+
   const styles: Record<string, React.CSSProperties> = {
     container: {
       width: '200px',
-      height: '280px',
+      height: '300px',
       display: 'flex',
       flexDirection: 'column',
       alignItems: 'center',
       justifyContent: 'center',
-      background: 'rgba(255, 255, 255, 0.15)',
-      borderRadius: '20px',
+      background: 'linear-gradient(135deg, rgba(138, 43, 226, 0.3) 0%, rgba(70, 130, 180, 0.3) 100%)',
+      borderRadius: '24px',
       cursor: 'pointer',
       userSelect: 'none',
       fontFamily: 'system-ui, -apple-system, sans-serif',
+      boxShadow: '0 8px 32px rgba(0, 0, 0, 0.2)',
+      backdropFilter: 'blur(10px)',
     },
     pet: {
       fontSize: '80px',
       transition: 'transform 0.3s ease',
       animation: `${getPetAnimation()} 1s ease-in-out infinite`,
+      filter: 'drop-shadow(0 4px 8px rgba(0,0,0,0.3))',
     },
     status: {
       marginTop: '12px',
-      padding: '4px 12px',
+      padding: '6px 16px',
       background: 'rgba(255, 255, 255, 0.25)',
-      borderRadius: '12px',
+      borderRadius: '16px',
       fontSize: '12px',
       color: '#fff',
+      fontWeight: '500',
+      boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+    },
+    message: {
+      marginTop: '8px',
+      padding: '6px 12px',
+      background: 'rgba(0,0,0,0.3)',
+      borderRadius: '12px',
+      fontSize: '11px',
+      color: '#fff',
+      maxWidth: '170px',
+      textAlign: 'center',
+      lineHeight: '1.4',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
     },
     button: {
       marginTop: '12px',
-      padding: '6px 12px',
+      padding: '8px 16px',
       background: 'rgba(255, 255, 255, 0.2)',
       border: 'none',
-      borderRadius: '8px',
+      borderRadius: '12px',
       color: '#fff',
-      fontSize: '11px',
+      fontSize: '12px',
       cursor: 'pointer',
+      transition: 'background 0.3s ease',
+    },
+    hint: {
+      marginTop: '8px',
+      fontSize: '10px',
+      color: 'rgba(255,255,255,0.7)',
+    },
+    screenshotHint: {
+      position: 'absolute',
+      top: '20px',
+      right: '20px',
+      padding: '4px 8px',
+      background: 'rgba(76, 175, 80, 0.9)',
+      borderRadius: '8px',
+      fontSize: '10px',
+      color: '#fff',
+      animation: 'fadeIn 0.3s ease',
     },
   };
 
   return (
-    <div ref={petRef} style={styles.container} onClick={handlePetClick}>
+    <div ref={petRef} style={styles.container} onClick={handlePetClick} onContextMenu={handleLongPress}>
       <div style={styles.pet}>{getPetEmoji()}</div>
       <div style={styles.status}>
         {status === 'idle' && '点击说话'}
-        {status === 'recording' && '正在录音...'}
-        {status === 'thinking' && '思考中...'}
-        {status === 'speaking' && '说话中...'}
+        {status === 'recording' && '🎤 录音中...'}
+        {status === 'thinking' && '🤔 思考中...'}
+        {status === 'speaking' && '🔊 说话中...'}
       </div>
       {lastMessage && status === 'idle' && (
-        <div style={{ marginTop: '8px', padding: '4px 8px', background: 'rgba(0,0,0,0.3)', borderRadius: '8px', fontSize: '10px', color: '#fff', maxWidth: '160px', textAlign: 'center' }}>
-          {lastMessage.slice(0, 30)}...
-        </div>
+        <div style={styles.message} title={lastMessage}>{lastMessage}</div>
       )}
+      <div style={styles.hint}>右键截图分析</div>
       <button style={styles.button} onClick={(e) => { e.stopPropagation(); toggleMode(); }}>
-        打开管理端
+        管理端
       </button>
+      {showScreenshotHint && <div style={styles.screenshotHint}>📸 截图完成</div>}
       <style>{`
         @keyframes float {
-          0%, 100% { transform: translateY(0); }
-          50% { transform: translateY(-10px); }
-        }
-        @keyframes bounce {
-          0%, 100% { transform: translateY(0) scale(1); }
-          50% { transform: translateY(-15px) scale(1.1); }
+          0%, 100% { transform: translateY(0) rotate(0deg); }
+          25% { transform: translateY(-8px) rotate(-2deg); }
+          50% { transform: translateY(-12px) rotate(0deg); }
+          75% { transform: translateY(-8px) rotate(2deg); }
         }
         @keyframes pulse {
           0%, 100% { transform: scale(1); }
-          50% { transform: scale(1.1); }
+          50% { transform: scale(1.15); }
         }
         @keyframes wave {
-          0%, 100% { transform: rotate(-5deg); }
-          50% { transform: rotate(5deg); }
+          0%, 100% { transform: rotate(-10deg); }
+          50% { transform: rotate(10deg); }
+        }
+        @keyframes fadeIn {
+          from { opacity: 0; transform: translateY(-10px); }
+          to { opacity: 1; transform: translateY(0); }
         }
       `}</style>
     </div>
