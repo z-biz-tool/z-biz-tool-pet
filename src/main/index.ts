@@ -4,6 +4,13 @@ import * as fs from 'fs';
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
 
 const isDev = process.env.NODE_ENV !== 'production' && !app.isPackaged;
+
+app.commandLine.appendSwitch('--disable-gpu');
+app.commandLine.appendSwitch('--disable-gpu-compositing');
+app.commandLine.appendSwitch('--disable-gpu-sandbox');
+app.commandLine.appendSwitch('--no-sandbox');
+app.commandLine.appendSwitch('--disable-software-rasterizer');
+
 console.log('[Z-Bot Main] 应用启动...');
 console.log('[Z-Bot Main] 是否开发模式:', isDev);
 
