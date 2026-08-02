@@ -32,6 +32,8 @@
     "wait-on": "^9.0.5"
   },
   "dependencies": {
+    "@ant-design/icons": "^6.3.2",
+    "antd": "^6.5.3",
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "multer": "^2.1.1",

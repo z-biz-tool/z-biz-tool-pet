@@ -1,97 +1,178 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { SYSTEM_PROMPT, MODEL_NAME } from '../shared/prompts';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  Layout,
+  Input,
+  Button,
+  Avatar,
+  Tooltip,
+  Tag,
+  Card,
+  Spin,
+  message,
+  theme as antdTheme,
+  ConfigProvider,
+} from 'antd';
+import {
+  AudioOutlined,
+  AudioMutedOutlined,
+  CameraOutlined,
+  SendOutlined,
+  SettingOutlined,
+  SwapOutlined,
+  DeleteOutlined,
+  SoundOutlined,
+} from '@ant-design/icons';
+import SettingsPanel from './SettingsPanel';
+import { DEFAULT_CONFIG, SUGGESTED_QUESTIONS } from '../shared/prompts';
+
+const { Header, Content, Footer } = Layout;
+const { TextArea } = Input;
 
 const log = (msg: string) => {
   console.log(msg);
   window.electronAPI?.log(msg);
 };
 
-interface Message {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  timestamp: Date;
+/** 简易 Markdown 渲染：代码块 / 行内代码 / 加粗 / 换行 */
+function renderMarkdown(text: string): React.ReactNode {
+  const parts = text.split(/(```[\s\S]*?```)/g);
+  return parts.map((part, idx) => {
+    if (part.startsWith('```')) {
+      const code = part.replace(/^```\w*\n?/, '').replace(/```$/, '');
+      return (
+        <pre
+          key={idx}
+          style={{
+            background: 'rgba(0,0,0,0.4)',
+            borderRadius: 8,
+            padding: '12px',
+            margin: '6px 0',
+            overflowX: 'auto',
+            fontSize: 13,
+            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+            color: '#e6e6e6',
+          }}
+        >
+          <code>{code}</code>
+        </pre>
+      );
+    }
+    // 行内代码 + 加粗 + 换行
+    const lines = part.split('\n');
+    return (
+      <span key={idx}>
+        {lines.map((line, li) => (
+          <React.Fragment key={li}>
+            {renderInline(line)}
+            {li < lines.length - 1 && <br />}
+          </React.Fragment>
+        ))}
+      </span>
+    );
+  });
+}
+
+function renderInline(text: string): React.ReactNode {
+  const tokens = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
+  return tokens.map((t, i) => {
+    if (t.startsWith('**') && t.endsWith('**')) {
+      return <strong key={i}>{t.slice(2, -2)}</strong>;
+    }
+    if (t.startsWith('`') && t.endsWith('`')) {
+      return (
+        <code
+          key={i}
+          style={{ background: 'rgba(0,0,0,0.3)', padding: '1px 4px', borderRadius: 3, fontFamily: 'ui-monospace, monospace' }}
+        >
+          {t.slice(1, -1)}
+        </code>
+      );
+    }
+    return <React.Fragment key={i}>{t}</React.Fragment>;
+  });
 }
 
 function App() {
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isListening, setIsListening] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isCapturing, setIsCapturing] = useState(false);
+  const [isThinking, setIsThinking] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [config, setConfig] = useState<PetConfig>(DEFAULT_CONFIG);
+  const [online, setOnline] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
 
-  useEffect(() => {
-    loadHistory();
+  const { token: themeToken } = antdTheme.useToken();
+  const accent = config.themeColor || themeToken.colorPrimary;
 
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  // 加载配置 + 历史
+  useEffect(() => {
+    (async () => {
+      try {
+        const cfg = await window.electronAPI?.loadConfig();
+        if (cfg) setConfig(cfg);
+        const history = await window.electronAPI?.loadHistory();
+        if (history && Array.isArray(history)) {
+          setMessages(history);
+          log('[Admin] 加载历史 ' + history.length + ' 条');
+        }
+      } catch (e) {
+        log('[Admin] 初始化失败');
+      }
+    })();
+
+    // Web Speech API（备用，whisper.cpp 不可用时）
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (SpeechRecognition) {
       recognitionRef.current = new SpeechRecognition();
       recognitionRef.current.continuous = false;
       recognitionRef.current.interimResults = true;
       recognitionRef.current.lang = 'zh-CN';
-
       recognitionRef.current.onresult = (event: any) => {
         const transcript = Array.from(event.results)
-          .map((result: any) => result[0].transcript)
+          .map((r: any) => r[0].transcript)
           .join('');
-        if (event.results[0].isFinal) {
-          sendMessage(transcript);
-        }
+        if (event.results[0].isFinal) sendMessage(transcript);
       };
-
-      recognitionRef.current.onend = () => {
-        setIsListening(false);
-      };
+      recognitionRef.current.onend = () => setIsListening(false);
     }
 
-    const unsubscribeStart = window.electronAPI?.onVoiceStart(() => {
-      startListening();
-    });
-    const unsubscribeStop = window.electronAPI?.onVoiceStop(() => {
-      stopListening();
-    });
+    const unsubStart = window.electronAPI?.onVoiceStart(() => startListening());
+    const unsubStop = window.electronAPI?.onVoiceStop(() => stopListening());
+
+    // 检测 ollama 在线状态
+    checkOnline();
+    const onlineTimer = setInterval(checkOnline, 30000);
+
     return () => {
       recognitionRef.current?.stop();
-      unsubscribeStart?.();
-      unsubscribeStop?.();
+      unsubStart?.();
+      unsubStop?.();
+      clearInterval(onlineTimer);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const checkOnline = async () => {
+    try {
+      const res = await fetch(config.ollamaUrl + '/api/tags', { method: 'GET', signal: AbortSignal.timeout(3000) });
+      setOnline(res.ok);
+    } catch {
+      setOnline(false);
+    }
+  };
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const loadHistory = async () => {
-    try {
-      const history = await window.electronAPI?.getConversationHistory();
-      if (history && Array.isArray(history)) {
-        setMessages(history);
-        log('[Z-Bot Admin] 加载对话历史，共 ' + history.length + ' 条');
-      }
-    } catch (error) {
-      log('[Z-Bot Admin] 加载对话历史失败');
-    }
-  };
-
-  const saveMessage = async (message: Message) => {
-    try {
-      await window.electronAPI?.addMessageToHistory(message);
-    } catch (error) {
-      log('[Z-Bot Admin] 保存消息失败');
-    }
-  };
-
-  const clearHistory = async () => {
-    try {
-      await window.electronAPI?.clearConversation();
-      setMessages([]);
-      log('[Z-Bot Admin] 清空对话历史');
-    } catch (error) {
-      log('[Z-Bot Admin] 清空对话历史失败');
-    }
-  };
+  // 持久化历史（全量覆盖写）
+  const persistHistory = useCallback((msgs: ChatMessage[]) => {
+    window.electronAPI?.saveHistory(msgs).catch(() => {});
+  }, []);
 
   const startListening = () => {
     if (recognitionRef.current && !isListening) {
@@ -99,7 +180,6 @@ function App() {
       setIsListening(true);
     }
   };
-
   const stopListening = () => {
     if (recognitionRef.current && isListening) {
       recognitionRef.current.stop();
@@ -112,81 +192,81 @@ function App() {
     try {
       const result = await window.electronAPI?.captureScreenshot();
       if (result?.success && result.path) {
-        log('[Z-Bot Admin] 截图成功: ' + result.path);
+        message.success('截图成功');
         sendMessage(`我刚截取了屏幕截图，保存路径: ${result.path}。请帮我分析一下屏幕内容。`);
       } else {
-        log('[Z-Bot Admin] 截图失败: ' + result?.error);
+        message.error('截图失败: ' + (result?.error || '未知错误'));
       }
-    } catch (error: any) {
-      log('[Z-Bot Admin] 截图错误: ' + error.message);
+    } catch (e: any) {
+      message.error('截图错误: ' + e.message);
     } finally {
       setIsCapturing(false);
     }
   };
 
   const sendMessage = async (content: string) => {
-    if (!content.trim()) return;
+    if (!content.trim() || isThinking) return;
 
-    log('[Z-Bot Admin] 发送消息: ' + content);
-    const userMessage: Message = {
+    const userMsg: ChatMessage = {
       id: Date.now().toString(),
       role: 'user',
       content,
-      timestamp: new Date(),
+      timestamp: new Date().toISOString(),
     };
-    setMessages((prev) => [...prev, userMessage]);
-    saveMessage(userMessage);
+    const newMsgs = [...messages, userMsg];
+    setMessages(newMsgs);
+    persistHistory(newMsgs);
     setInput('');
+    setIsThinking(true);
 
     try {
-      log('[Z-Bot Admin] 调用 ollama...');
-      const startTime = Date.now();
-      const response = await fetch('http://localhost:11434/api/chat', {
+      const response = await fetch(config.ollamaUrl + '/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: MODEL_NAME,
+          model: config.modelName,
           messages: [
-            { role: 'system', content: SYSTEM_PROMPT },
+            { role: 'system', content: config.systemPrompt || DEFAULT_CONFIG.systemPrompt },
             ...messages.map((m) => ({ role: m.role, content: m.content })),
             { role: 'user', content },
           ],
           stream: false,
         }),
       });
-      const elapsed = Date.now() - startTime;
-      log('[Z-Bot Admin] ollama 响应时间: ' + elapsed + 'ms');
 
       if (!response.ok) {
-        log('[Z-Bot Admin] ollama 错误: ' + response.status);
+        message.error('模型错误: ' + response.status);
+        setIsThinking(false);
         return;
       }
 
       const data = await response.json();
-      log('[Z-Bot Admin] ollama 响应: ' + (data.message?.content || '').slice(0, 50));
-
-      const assistantMessage: Message = {
+      const reply = data.message?.content || '抱歉，我无法理解您的问题。';
+      const aiMsg: ChatMessage = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: data.message?.content || '抱歉，我无法理解您的问题。',
-        timestamp: new Date(),
+        content: reply,
+        timestamp: new Date().toISOString(),
       };
-      setMessages((prev) => [...prev, assistantMessage]);
-      saveMessage(assistantMessage);
+      const finalMsgs = [...newMsgs, aiMsg];
+      setMessages(finalMsgs);
+      persistHistory(finalMsgs);
 
-      await speakText(assistantMessage.content);
-    } catch (error: any) {
-      log('[Z-Bot Admin] Error: ' + error.message);
+      speakText(reply);
+    } catch (e: any) {
+      message.error('请求失败: ' + e.message);
+    } finally {
+      setIsThinking(false);
     }
   };
 
   const speakText = async (text: string) => {
     setIsSpeaking(true);
     try {
-      const ttsResponse = await fetch('http://localhost:8086/speak', {
+      const ttsResponse = await fetch(config.ttsUrl + '/speak', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
+        body: JSON.stringify({ text, speed: config.voiceSpeed }),
       });
       const ttsData = await ttsResponse.json();
       if (ttsData.audio) {
@@ -196,90 +276,235 @@ function App() {
       } else {
         setIsSpeaking(false);
       }
-    } catch (e) {
-      log('[Z-Bot Admin] TTS 错误');
+    } catch {
       setIsSpeaking(false);
     }
   };
 
-  const toggleMode = () => {
-    window.electronAPI?.toggleWindow('pet');
+  const clearHistory = async () => {
+    await window.electronAPI?.clearHistory();
+    setMessages([]);
+    message.success('已清空对话');
   };
 
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#1a1a2e', color: '#fff' }}>
-      <header style={{ padding: '16px', borderBottom: '1px solid #333', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h1 style={{ margin: 0, fontSize: '20px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-          🐱 Z-Bot 桌面伴侣
-        </h1>
-        <div style={{ display: 'flex', gap: '8px' }}>
-          {messages.length > 0 && (
-            <button onClick={clearHistory} style={{ padding: '6px 12px', background: '#4a4a6a', border: 'none', borderRadius: '6px', color: '#fff', cursor: 'pointer', fontSize: '12px' }}>
-              清空对话
-            </button>
-          )}
-          <button onClick={toggleMode} style={{ padding: '8px 16px', background: '#6a5acd', border: 'none', borderRadius: '8px', color: '#fff', cursor: 'pointer', fontSize: '14px' }}>
-            切换到萌宠模式
-          </button>
-        </div>
-      </header>
+  const toggleMode = () => window.electronAPI?.toggleWindow('pet');
 
-      <div style={{ flex: 1, overflow: 'auto', padding: '16px' }}>
-        {messages.length === 0 ? (
-          <div style={{ textAlign: 'center', color: '#888', marginTop: '40px' }}>
-            <div style={{ fontSize: '64px', marginBottom: '16px' }}>🐱</div>
-            <p>欢迎使用 Z-Bot 桌面伴侣</p>
-            <p>我是你的专属小猫咪助手，随时陪伴你~</p>
-            <p style={{ fontSize: '12px', marginTop: '20px', color: '#aaa' }}>💡 点击麦克风开始语音对话，或点击相机截图分析</p>
-          </div>
-        ) : (
-          messages.map((msg) => (
-            <div key={msg.id} style={{ marginBottom: '16px', textAlign: msg.role === 'user' ? 'right' : 'left' }}>
-              <div style={{ display: 'inline-flex', alignItems: 'flex-start', gap: '8px' }}>
-                <div style={{ fontSize: '20px', marginTop: '4px' }}>
-                  {msg.role === 'user' ? '👤' : '🐱'}
-                </div>
-                <div style={{ display: 'inline-block', maxWidth: '70%', padding: '12px 16px', borderRadius: msg.role === 'user' ? '16px 16px 4px 16px' : '16px 16px 16px 4px', background: msg.role === 'user' ? '#6a5acd' : '#2a2a4e', lineHeight: '1.5' }}>
-                  {msg.content}
-                </div>
-              </div>
-              <div style={{ fontSize: '10px', color: '#666', marginTop: '4px', textAlign: msg.role === 'user' ? 'right' : 'left', paddingLeft: msg.role === 'user' ? '0' : '36px', paddingRight: msg.role === 'user' ? '36px' : '0' }}>
-                {new Date(msg.timestamp).toLocaleTimeString()}
+  return (
+    <ConfigProvider
+      theme={{
+        token: { colorPrimary: accent, borderRadius: 10, colorBgBase: '#1a1a2e', colorTextBase: '#ffffff' },
+        algorithm: antdTheme.darkAlgorithm,
+      }}
+    >
+      <Layout style={{ height: '100vh', background: '#1a1a2e' }}>
+        {/* Header */}
+        <Header
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '0 20px',
+            background: 'linear-gradient(90deg, #16213e 0%, #1a1a2e 100%)',
+            borderBottom: '1px solid rgba(255,255,255,0.08)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <Avatar
+              size={40}
+              style={{
+                background: `linear-gradient(135deg, ${accent}, ${accent}99)`,
+                fontSize: 22,
+              }}
+            >
+              🐱
+            </Avatar>
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 16 }}>{config.petName}</div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#999' }}>
+                <span
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: '50%',
+                    background: online ? '#52c41a' : '#999',
+                    display: 'inline-block',
+                    boxShadow: online ? '0 0 6px #52c41a' : 'none',
+                  }}
+                />
+                {online ? '在线' : '离线'}
+                {isSpeaking && <Tag color="blue" style={{ marginLeft: 6, fontSize: 11 }}>播放中</Tag>}
               </div>
             </div>
-          ))
-        )}
-        <div ref={messagesEndRef} />
-      </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Tooltip title="清空对话">
+              <Button shape="circle" icon={<DeleteOutlined />} onClick={clearHistory} disabled={messages.length === 0} />
+            </Tooltip>
+            <Tooltip title="设置">
+              <Button shape="circle" icon={<SettingOutlined />} onClick={() => setSettingsOpen(true)} />
+            </Tooltip>
+            <Tooltip title="切换到萌宠模式">
+              <Button type="primary" icon={<SwapOutlined />} onClick={toggleMode}>
+                萌宠
+              </Button>
+            </Tooltip>
+          </div>
+        </Header>
 
-      <div style={{ padding: '16px', borderTop: '1px solid #333', display: 'flex', gap: '8px', alignItems: 'center' }}>
-        <button
-          onClick={isListening ? stopListening : startListening}
-          style={{ padding: '12px', background: isListening ? '#e74c3c' : '#6a5acd', border: 'none', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'transform 0.2s', transform: isListening ? 'scale(1.1)' : 'scale(1)' }}
-        >
-          {isListening ? '🎤' : '🎙️'}
-        </button>
-        <button
-          onClick={captureScreenshot}
-          disabled={isCapturing}
-          style={{ padding: '12px', background: isCapturing ? '#555' : '#4a90d9', border: 'none', borderRadius: '50%', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-        >
-          {isCapturing ? '⏳' : '📷'}
-        </button>
-        <input
-          type="text"
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyPress={(e) => e.key === 'Enter' && sendMessage(input)}
-          placeholder="和你的小猫咪说点什么吧~"
-          style={{ flex: 1, padding: '12px 16px', borderRadius: '16px', border: '1px solid #333', background: '#2a2a3e', color: '#fff', outline: 'none', fontSize: '14px' }}
-        />
-        <button onClick={() => sendMessage(input)} style={{ padding: '12px 24px', background: '#6a5acd', border: 'none', borderRadius: '16px', color: '#fff', cursor: 'pointer', fontSize: '14px' }}>
-          发送
-        </button>
-        {isSpeaking && <span style={{ marginLeft: '8px', fontSize: '12px', color: '#4a90d9' }}>🔊 播放中...</span>}
-      </div>
-    </div>
+        {/* 消息列表 / 空状态 */}
+        <Content style={{ overflow: 'auto', padding: 16 }}>
+          {messages.length === 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+              <div
+                style={{
+                  width: 96,
+                  height: 96,
+                  borderRadius: '50%',
+                  background: `linear-gradient(135deg, ${accent}, ${accent}66)`,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 52,
+                  marginBottom: 20,
+                  boxShadow: `0 8px 32px ${accent}55`,
+                  animation: 'adminFloat 3s ease-in-out infinite',
+                }}
+              >
+                🐱
+              </div>
+              <h2 style={{ color: '#fff', marginBottom: 8 }}>欢迎使用 {config.petName}</h2>
+              <p style={{ color: '#888', marginBottom: 24 }}>我是你的专属桌面伴侣，随时陪伴你~</p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 420, width: '100%' }}>
+                {SUGGESTED_QUESTIONS.map((q, i) => (
+                  <Card
+                    key={i}
+                    hoverable
+                    size="small"
+                    onClick={() => sendMessage(q)}
+                    style={{
+                      background: 'rgba(255,255,255,0.05)',
+                      border: '1px solid rgba(255,255,255,0.1)',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <span style={{ color: '#ccc' }}>{q}</span>
+                  </Card>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+              {messages.map((msg) => (
+                <div
+                  key={msg.id}
+                  style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start', gap: 8 }}
+                >
+                  {msg.role === 'assistant' && (
+                    <Avatar size={32} style={{ background: accent, flexShrink: 0 }}>
+                      🐱
+                    </Avatar>
+                  )}
+                  <div style={{ maxWidth: '72%' }}>
+                    <div
+                      style={{
+                        padding: '10px 14px',
+                        borderRadius: msg.role === 'user' ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
+                        background: msg.role === 'user' ? accent : 'rgba(255,255,255,0.08)',
+                        color: '#fff',
+                        lineHeight: 1.6,
+                        fontSize: 14,
+                        wordBreak: 'break-word',
+                      }}
+                    >
+                      {renderMarkdown(msg.content)}
+                    </div>
+                    <div style={{ fontSize: 11, color: '#666', marginTop: 4, textAlign: msg.role === 'user' ? 'right' : 'left' }}>
+                      {new Date(msg.timestamp).toLocaleTimeString()}
+                    </div>
+                  </div>
+                  {msg.role === 'user' && (
+                    <Avatar size={32} style={{ background: '#555', flexShrink: 0 }}>
+                      我
+                    </Avatar>
+                  )}
+                </div>
+              ))}
+              {isThinking && (
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <Avatar size={32} style={{ background: accent }}>
+                    🐱
+                  </Avatar>
+                  <div style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.08)', borderRadius: '16px 16px 16px 4px' }}>
+                    <Spin size="small" /> <span style={{ color: '#999', marginLeft: 8 }}>思考中...</span>
+                  </div>
+                </div>
+              )}
+              <div ref={messagesEndRef} />
+            </div>
+          )}
+        </Content>
+
+        {/* 输入区 */}
+        <Footer style={{ padding: 12, background: '#16213e', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+            <Tooltip title={isListening ? '停止录音' : '语音输入'}>
+              <Button
+                shape="circle"
+                size="large"
+                danger={isListening}
+                icon={isListening ? <AudioMutedOutlined /> : <AudioOutlined />}
+                onClick={isListening ? stopListening : startListening}
+                style={isListening ? { animation: 'adminPulse 1s infinite' } : undefined}
+              />
+            </Tooltip>
+            <Tooltip title="截图分析">
+              <Button
+                shape="circle"
+                size="large"
+                icon={<CameraOutlined />}
+                onClick={captureScreenshot}
+                loading={isCapturing}
+              />
+            </Tooltip>
+            <TextArea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onPressEnter={(e) => {
+                if (!e.shiftKey) {
+                  e.preventDefault();
+                  sendMessage(input);
+                }
+              }}
+              placeholder="和你的小猫咪说点什么吧~ (Enter 发送, Shift+Enter 换行)"
+              autoSize={{ minRows: 1, maxRows: 4 }}
+              style={{ flex: 1, borderRadius: 20, background: 'rgba(255,255,255,0.06)', borderColor: 'rgba(255,255,255,0.1)' }}
+            />
+            <Button
+              type="primary"
+              shape="circle"
+              size="large"
+              icon={<SendOutlined />}
+              onClick={() => sendMessage(input)}
+              disabled={!input.trim() || isThinking}
+            />
+            {isSpeaking && <SoundOutlined style={{ color: accent, fontSize: 18, animation: 'adminPulse 1s infinite' }} />}
+          </div>
+        </Footer>
+
+        <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} onSave={setConfig} />
+
+        <style>{`
+          @keyframes adminFloat {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-8px); }
+          }
+          @keyframes adminPulse {
+            0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(245,34,45,0.4); }
+            50% { transform: scale(1.08); box-shadow: 0 0 0 8px rgba(245,34,45,0); }
+          }
+        `}</style>
+      </Layout>
+    </ConfigProvider>
   );
 }
 
