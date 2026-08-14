@@ -410,7 +410,7 @@ async function streamOllama(
     }
     for (const line of lines) {
       try {
-        const data = JSON.parse(line);
+        const data: any = JSON.parse(line);
         if (data.message?.content) {
           fullContent += data.message.content;
           sender('ai:streamChunk', { content: data.message.content, done: false });
