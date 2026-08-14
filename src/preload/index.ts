@@ -16,6 +16,37 @@ export interface PetConfig {
   voiceSpeed: number;
   petName: string;
   themeColor: string;
+  currentSkinId?: string;
+  stealthMode?: boolean;
+}
+
+export interface PetSkin {
+  id: string;
+  name: string;
+  colors: {
+    body: string;
+    bodyLight: string;
+    bodyDark: string;
+    eye: string;
+    blush: string;
+    accent: string;
+  };
+  isCustom: boolean;
+}
+
+export interface PetStats {
+  hunger: number;
+  happiness: number;
+  energy: number;
+  cleanliness: number;
+  health: number;
+  affection: number;
+  age: number;
+  stage: 'egg' | 'baby' | 'child' | 'adult';
+  bornAt: string;
+  lastUpdate: string;
+  isSleeping: boolean;
+  isSick: boolean;
 }
 
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -28,6 +59,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('window:setPetPosition', x, y),
   showWindow: (mode: 'admin' | 'pet') => ipcRenderer.invoke('window:show', mode),
   hideWindow: (mode: 'admin' | 'pet') => ipcRenderer.invoke('window:hide', mode),
+
+  // 贴墙滑下
+  stickToEdge: () => ipcRenderer.invoke('window:stickToEdge'),
 
   // 语音事件
   onVoiceStart: (callback: () => void) => {
@@ -56,6 +90,48 @@ contextBridge.exposeInMainWorld('electronAPI', {
   addMessageToHistory: (message: ChatMessage) =>
     ipcRenderer.invoke('conversation:addMessage', message),
   clearConversation: () => ipcRenderer.invoke('history:clear'),
+
+  // ---------- 动画系统 IPC ----------
+  getCursorPosition: () => ipcRenderer.invoke('pet:getCursorPosition'),
+  triggerAnimation: (animType: string) => ipcRenderer.invoke('pet:triggerAnimation', animType),
+  setPetPositionWithBounds: (x: number, y: number) => ipcRenderer.invoke('pet:setPosition', x, y),
+  onTriggerAnimation: (callback: (animType: string) => void) => {
+    ipcRenderer.on('pet:triggerAnimation', (_, animType) => callback(animType));
+    return () => ipcRenderer.removeListener('pet:triggerAnimation', callback as any);
+  },
+
+  // ---------- 皮肤系统 IPC ----------
+  getSkins: () => ipcRenderer.invoke('pet:getSkins'),
+  applySkin: (skinId: string) => ipcRenderer.invoke('pet:applySkin', skinId),
+  applySkinTheme: (skinData: { name: string; colors: { body: string; bodyLight: string; bodyDark: string; accent?: string } }) =>
+    ipcRenderer.invoke('pet:applySkinTheme', skinData),
+  onApplySkin: (callback: (skin: PetSkin) => void) => {
+    ipcRenderer.on('pet:applySkin', (_, skinId: string) => {
+      // 通过skinId获取完整皮肤数据
+      ipcRenderer.invoke('pet:getSkins').then((skins: PetSkin[]) => {
+        const skin = skins.find((s: PetSkin) => s.id === skinId);
+        if (skin) callback(skin);
+      });
+    });
+    ipcRenderer.on('pet:applySkinData', (_, skin: PetSkin) => callback(skin));
+    return () => {
+      ipcRenderer.removeListener('pet:applySkin', callback as any);
+      ipcRenderer.removeListener('pet:applySkinData', callback as any);
+    };
+  },
+
+  // ---------- 截图隐身 IPC ----------
+  toggleStealth: (enabled?: boolean) => ipcRenderer.invoke('pet:toggleStealth', enabled),
+  getStealthMode: () => ipcRenderer.invoke('pet:getStealthMode'),
+
+  // ---------- 宠物养成系统 IPC ----------
+  petGetStats: () => ipcRenderer.invoke('pet:getStats'),
+  petFeed: () => ipcRenderer.invoke('pet:feed'),
+  petPlay: () => ipcRenderer.invoke('pet:play'),
+  petWash: () => ipcRenderer.invoke('pet:wash'),
+  petSleep: () => ipcRenderer.invoke('pet:sleep'),
+  petMedicine: () => ipcRenderer.invoke('pet:medicine'),
+  petPet: () => ipcRenderer.invoke('pet:pet'),
 
   // 日志
   log: (msg: string) => ipcRenderer.send('log', msg),

@@ -36,6 +36,11 @@ export const DEFAULT_CONFIG = {
   voiceSpeed: 1.0,
   petName: 'Z-Bot 小猫咪',
   themeColor: '#722ed1',
+  aiProvider: 'ollama',
+  aiApiKey: '',
+  aiBaseUrl: OLLAMA_URL,
+  aiModel: MODEL_NAME,
+  providers: [],
 };
 
 /** 空状态建议问题 */

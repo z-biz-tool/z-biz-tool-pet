@@ -1,17 +1,26 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  Emotion,
+  PetStats,
+  EMOTION_CONFIGS,
+  inferEmotionFromStats,
+  resolveEmotion,
+  buildEmotionPromptSuffix,
+} from '../shared/emotions';
 
 const log = (msg: string) => {
   console.log(msg);
   window.electronAPI?.log(msg);
 };
 
-type PetStatus = 'idle' | 'recording' | 'thinking' | 'speaking';
+type PetStatus = 'idle' | 'recording' | 'thinking' | 'speaking' | 'interrupted';
 
 const STATUS_TEXT: Record<PetStatus, string> = {
   idle: '点击和我说话~',
   recording: '🎤 录音中... 再次点击停止',
   thinking: '🤔 思考中...',
-  speaking: '🔊 说话中...',
+  speaking: '🔊 说话中... (可打断)',
+  interrupted: '⚡ 被打断!',
 };
 
 const DEFAULT_OLLAMA = 'http://localhost:11434';
@@ -19,6 +28,41 @@ const DEFAULT_STT = 'http://localhost:8084';
 const DEFAULT_TTS = 'http://localhost:8086';
 const DEFAULT_MODEL = 'qwen2.5:7b-instruct-q4_K_M';
 const DEFAULT_PROMPT = '你是一只可爱的桌面萌宠小猫咪，名字叫Z-Bot。性格活泼可爱、温柔体贴，用简短温馨的语言回复。';
+
+// 语音打断阈值（可配置，默认30）
+const INTERRUPT_THRESHOLD = 30;
+
+const DEFAULT_PET_STATS: PetStats = {
+  hunger: 80,
+  happiness: 80,
+  energy: 80,
+  cleanliness: 80,
+  health: 100,
+  affection: 50,
+  age: 0,
+  stage: 'egg',
+  bornAt: new Date().toISOString(),
+  lastUpdate: new Date().toISOString(),
+  isSleeping: false,
+  isSick: false,
+};
+
+/** stage 对应的宠物大小 */
+const STAGE_SIZES: Record<string, number> = {
+  egg: 80,
+  baby: 100,
+  child: 120,
+  adult: 140,
+};
+
+/** 状态条配置 */
+const STAT_BARS: { key: keyof PetStats; label: string; icon: string; color: string }[] = [
+  { key: 'hunger',      label: '饱食', icon: '🍖', color: '#ff9800' },
+  { key: 'happiness',   label: '快乐', icon: '😊', color: '#ffeb3b' },
+  { key: 'energy',      label: '精力', icon: '⚡', color: '#4caf50' },
+  { key: 'cleanliness', label: '清洁', icon: '✨', color: '#2196f3' },
+  { key: 'health',      label: '健康', icon: '❤️', color: '#f44336' },
+];
 
 function App() {
   const [status, setStatus] = useState<PetStatus>('idle');
@@ -33,6 +77,10 @@ function App() {
     petName: 'Z-Bot 小猫咪',
     voiceSpeed: 1.0,
   });
+  const [petStats, setPetStats] = useState<PetStats>(DEFAULT_PET_STATS);
+  const [currentEmotion, setCurrentEmotion] = useState<Emotion>('neutral');
+  const [showHUD, setShowHUD] = useState(false);
+  const [showActions, setShowActions] = useState(false);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -43,6 +91,29 @@ function App() {
   });
   const statusRef = useRef<PetStatus>('idle');
   statusRef.current = status;
+
+  // 语音打断相关 refs
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+  const isSpeakingRef = useRef(false);
+  const interruptStreamRef = useRef<MediaStream | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const interruptAnimFrameRef = useRef<number | null>(null);
+  const interruptThresholdRef = useRef(INTERRUPT_THRESHOLD);
+
+  // ---------- 加载宠物状态 ----------
+  const refreshPetStats = useCallback(async () => {
+    try {
+      const stats = await window.electronAPI?.petGetStats();
+      if (stats) {
+        setPetStats(stats);
+        const emotion = inferEmotionFromStats(stats);
+        setCurrentEmotion(emotion);
+      }
+    } catch (e: any) {
+      log('[Pet] 获取宠物状态失败: ' + e.message);
+    }
+  }, []);
 
   useEffect(() => {
     log('[Pet] 组件初始化');
@@ -62,16 +133,126 @@ function App() {
       }
     });
 
+    // 加载宠物状态
+    refreshPetStats();
+
+    // 每30秒刷新一次宠物状态
+    const statsInterval = setInterval(refreshPetStats, 30000);
+
     const unsubStart = window.electronAPI?.onVoiceStart(() => startRecording());
     const unsubStop = window.electronAPI?.onVoiceStop(() => stopRecording());
 
+    // 监听语音打断事件
+    const unsubInterrupt = window.electronAPI?.onVoiceInterrupt(() => {
+      handleInterrupt();
+    });
+
+    // 监听按住快捷键说话
+    const unsubPushToTalk = window.electronAPI?.onPushToTalkStart(() => {
+      if (statusRef.current === 'idle') {
+        startRecording();
+      } else if (statusRef.current === 'recording') {
+        stopRecording();
+      } else if (statusRef.current === 'speaking') {
+        handleInterrupt();
+      }
+    });
+
     return () => {
       stopRecording();
+      stopInterruptListener();
       unsubStart?.();
       unsubStop?.();
+      unsubInterrupt?.();
+      unsubPushToTalk?.();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // ---------- 语音打断监听 ----------
+  const startInterruptListener = async () => {
+    if (isSpeakingRef.current && interruptStreamRef.current) return; // 已在监听
+
+    try {
+      // 使用回声消除获取麦克风音频
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
+      interruptStreamRef.current = stream;
+
+      const audioContext = new AudioContext();
+      const source = audioContext.createMediaStreamSource(stream);
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.8;
+      source.connect(analyser);
+
+      audioContextRef.current = audioContext;
+      analyserRef.current = analyser;
+
+      log('[Pet] 语音打断监听已启动');
+
+      // 持续检测音量
+      const checkVolume = () => {
+        if (!isSpeakingRef.current || !analyserRef.current) {
+          return;
+        }
+        const data = new Uint8Array(analyserRef.current.frequencyBinCount);
+        analyserRef.current.getByteFrequencyData(data);
+        const avg = data.reduce((a, b) => a + b, 0) / data.length;
+
+        // 音量超过阈值 → 打断
+        if (avg > interruptThresholdRef.current) {
+          log('[Pet] 检测到用户说话，音量: ' + avg.toFixed(1) + ' > 阈值: ' + interruptThresholdRef.current);
+          handleInterrupt();
+          return;
+        }
+
+        interruptAnimFrameRef.current = requestAnimationFrame(checkVolume);
+      };
+      checkVolume();
+    } catch (error: any) {
+      log('[Pet] 启动打断监听失败: ' + error.message);
+    }
+  };
+
+  const stopInterruptListener = () => {
+    if (interruptAnimFrameRef.current) {
+      cancelAnimationFrame(interruptAnimFrameRef.current);
+      interruptAnimFrameRef.current = null;
+    }
+    if (interruptStreamRef.current) {
+      interruptStreamRef.current.getTracks().forEach((track) => track.stop());
+      interruptStreamRef.current = null;
+    }
+    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+      audioContextRef.current.close().catch(() => {});
+      audioContextRef.current = null;
+    }
+    analyserRef.current = null;
+  };
+
+  const handleInterrupt = () => {
+    log('[Pet] 语音打断!');
+    // 停止TTS播放
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause();
+      currentAudioRef.current = null;
+    }
+    isSpeakingRef.current = false;
+    stopInterruptListener();
+
+    setStatus('interrupted');
+    // 短暂显示打断状态后开始新录音
+    setTimeout(() => {
+      setStatus('idle');
+      startRecording();
+    }, 500);
+  };
 
   // ---------- 录音 ----------
   const startRecording = async () => {
@@ -79,11 +260,17 @@ function App() {
       stopRecording();
       return;
     }
-    if (statusRef.current !== 'idle') return;
+    if (statusRef.current !== 'idle' && statusRef.current !== 'interrupted') return;
 
     log('[Pet] 开始录音...');
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
@@ -193,29 +380,56 @@ function App() {
       log('[Pet] ollama 响应: ' + reply.slice(0, 50));
       setLastMessage(reply);
 
-      setStatus('speaking');
-      try {
-        const ttsResponse = await fetch(config.ttsUrl + '/speak', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ text: reply, speed: config.voiceSpeed }),
-        });
-        const ttsData = await ttsResponse.json();
-        if (ttsData.audio) {
-          const audio = new Audio('data:audio/mp3;base64,' + ttsData.audio);
-          audio.onended = () => {
-            log('[Pet] TTS 播放完成');
-            setStatus('idle');
-          };
-          audio.play();
-        } else {
-          setStatus('idle');
-        }
-      } catch {
-        setStatus('idle');
-      }
+      // 播放TTS并启动打断监听
+      await speakWithInterrupt(reply);
     } catch (error: any) {
       log('[Pet] Error: ' + error.message);
+      setStatus('idle');
+    }
+  };
+
+  const speakWithInterrupt = async (text: string) => {
+    setStatus('speaking');
+    isSpeakingRef.current = true;
+
+    try {
+      const ttsResponse = await fetch(config.ttsUrl + '/speak', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text, speed: config.voiceSpeed }),
+      });
+      const ttsData = await ttsResponse.json();
+      if (ttsData.audio) {
+        const audio = new Audio('data:audio/mp3;base64,' + ttsData.audio);
+        currentAudioRef.current = audio;
+
+        audio.onended = () => {
+          log('[Pet] TTS 播放完成');
+          currentAudioRef.current = null;
+          isSpeakingRef.current = false;
+          stopInterruptListener();
+          setStatus('idle');
+        };
+
+        audio.onerror = () => {
+          log('[Pet] TTS 播放错误');
+          currentAudioRef.current = null;
+          isSpeakingRef.current = false;
+          stopInterruptListener();
+          setStatus('idle');
+        };
+
+        await audio.play();
+
+        // TTS开始播放后，启动打断监听
+        startInterruptListener();
+      } else {
+        isSpeakingRef.current = false;
+        setStatus('idle');
+      }
+    } catch {
+      isSpeakingRef.current = false;
+      stopInterruptListener();
       setStatus('idle');
     }
   };
@@ -228,6 +442,9 @@ function App() {
       startRecording();
     } else if (status === 'recording') {
       stopRecording();
+    } else if (status === 'speaking') {
+      // 点击也可以打断
+      handleInterrupt();
     }
   };
 
@@ -265,8 +482,8 @@ function App() {
   }, [handleMouseMove, handleMouseUp]);
 
   // ---------- 眼睛/嘴巴 根据 status 变化 ----------
-  const eyeShape = status === 'thinking' ? 'thinking' : status === 'speaking' ? 'happy' : 'normal';
-  const mouthShape = status === 'speaking' ? 'speaking' : status === 'recording' ? 'o' : status === 'thinking' ? 'flat' : 'smile';
+  const eyeShape = status === 'thinking' ? 'thinking' : status === 'speaking' ? 'happy' : status === 'interrupted' ? 'surprised' : 'normal';
+  const mouthShape = status === 'speaking' ? 'speaking' : status === 'recording' ? 'o' : status === 'thinking' ? 'flat' : status === 'interrupted' ? 'o' : 'smile';
 
   return (
     <div
@@ -302,12 +519,17 @@ function App() {
         {status === 'thinking' && <div className="thinking-ring" />}
         {/* recording 时的脉冲圈 */}
         {status === 'recording' && <div className="recording-ring" />}
-        {/* speaking 时的声波 */}
+        {/* speaking 时的声波 + 可打断提示 */}
         {status === 'speaking' && (
-          <div className="sound-waves">
-            <span /><span /><span />
-          </div>
+          <>
+            <div className="sound-waves">
+              <span /><span /><span />
+            </div>
+            <div className="interrupt-hint">可打断</div>
+          </>
         )}
+        {/* interrupted 时的闪烁效果 */}
+        {status === 'interrupted' && <div className="interrupt-flash" />}
       </div>
 
       {/* 状态文字 */}
@@ -320,7 +542,7 @@ function App() {
 
       {/* 提示 */}
       {hint && <div className="hint">{hint}</div>}
-      {!hint && status === 'idle' && <div className="hint">右键截图分析</div>}
+      {!hint && status === 'idle' && <div className="hint">右键截图分析 | 点击说话</div>}
 
       {/* 管理端按钮 */}
       <button className="admin-btn" onClick={(e) => { e.stopPropagation(); toggleMode(); }}>
@@ -355,6 +577,7 @@ function App() {
         .pet-recording { animation: petShake 0.6s ease-in-out infinite; }
         .pet-thinking { animation: petWobble 1.5s ease-in-out infinite; }
         .pet-speaking { animation: petBounce 0.4s ease-in-out infinite; }
+        .pet-interrupted { animation: petInterrupt 0.3s ease-in-out; }
 
         @keyframes petFloat {
           0%, 100% { transform: translateY(0) rotate(0deg); }
@@ -373,6 +596,11 @@ function App() {
         @keyframes petBounce {
           0%, 100% { transform: translateY(0) scale(1); }
           50% { transform: translateY(-4px) scale(1.05); }
+        }
+        @keyframes petInterrupt {
+          0% { transform: scale(1); }
+          50% { transform: scale(1.15); filter: brightness(1.5); }
+          100% { transform: scale(1); }
         }
 
         /* 眼睛 */
@@ -411,6 +639,16 @@ function App() {
           left: 3px;
           width: 12px;
           height: 12px;
+        }
+        .eye-surprised {
+          width: 22px;
+          height: 22px;
+        }
+        .eye-surprised::after {
+          width: 10px;
+          height: 10px;
+          top: 6px;
+          left: 6px;
         }
 
         /* 嘴巴 */
@@ -513,6 +751,39 @@ function App() {
         @keyframes soundBar {
           from { transform: scaleY(0.4); }
           to { transform: scaleY(1); }
+        }
+
+        /* 可打断提示 */
+        .interrupt-hint {
+          position: absolute;
+          bottom: -22px;
+          left: 50%;
+          transform: translateX(-50%);
+          font-size: 9px;
+          color: #b794f6;
+          background: rgba(114, 46, 209, 0.3);
+          padding: 1px 6px;
+          border-radius: 6px;
+          white-space: nowrap;
+          animation: hintPulse 1.5s ease-in-out infinite;
+        }
+        @keyframes hintPulse {
+          0%, 100% { opacity: 0.6; }
+          50% { opacity: 1; }
+        }
+
+        /* 打断闪烁效果 */
+        .interrupt-flash {
+          position: absolute;
+          top: 0; left: 0;
+          width: 120px; height: 120px;
+          border-radius: 50%;
+          background: rgba(255, 255, 255, 0.4);
+          animation: flashOnce 0.3s ease-out;
+        }
+        @keyframes flashOnce {
+          from { opacity: 1; transform: scale(1); }
+          to { opacity: 0; transform: scale(1.3); }
         }
 
         /* 文字 */
