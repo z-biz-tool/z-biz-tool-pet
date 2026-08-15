@@ -55,6 +55,11 @@ interface PetConfig {
   themeColor: string;
   currentSkinId?: string;
   stealthMode?: boolean;
+  aiProvider?: string;
+  aiApiKey?: string;
+  aiBaseUrl?: string;
+  aiModel?: string;
+  providers?: any[];
 }
 
 // ---------- 宠物养成系统 ----------

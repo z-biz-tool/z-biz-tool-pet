@@ -13,7 +13,7 @@ export interface AIProvider {
 }
 
 export interface ChatRequest {
-  messages: Array<{ role: string; content: string; images?: string[] }>;
+  messages: Array<{ role: string; content: string; images?: string[]; toolCalls?: any[]; toolCallId?: string }>;
   model: string;
   stream?: boolean;
   tools?: any[];
