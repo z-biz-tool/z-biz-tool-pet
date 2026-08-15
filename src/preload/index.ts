@@ -210,6 +210,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
   pinRemove: (id: string) => ipcRenderer.invoke('pin:remove', id),
   pinList: () => ipcRenderer.invoke('pin:list'),
 
+  // ---------- 会议转录 IPC ----------
+  meetingStart: (title: string) => ipcRenderer.invoke('meeting:start', title),
+  meetingEnd: () => ipcRenderer.invoke('meeting:end'),
+  meetingCancel: () => ipcRenderer.invoke('meeting:cancel'),
+  meetingGetState: () => ipcRenderer.invoke('meeting:getState'),
+  onMeetingState: (callback: (state: any) => void) => {
+    ipcRenderer.on('meeting:state', (_, state) => callback(state));
+    return () => ipcRenderer.removeListener('meeting:state', callback as any);
+  },
+  onMeetingSegment: (callback: (segment: any) => void) => {
+    ipcRenderer.on('meeting:segment', (_, segment) => callback(segment));
+    return () => ipcRenderer.removeListener('meeting:segment', callback as any);
+  },
+  onMeetingRollingSummary: (callback: (summary: string) => void) => {
+    ipcRenderer.on('meeting:rollingSummary', (_, summary) => callback(summary));
+    return () => ipcRenderer.removeListener('meeting:rollingSummary', callback as any);
+  },
+
   // 日志
   log: (msg: string) => ipcRenderer.send('log', msg),
 });

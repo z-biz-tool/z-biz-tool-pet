@@ -30,6 +30,7 @@ import {
   ExclamationCircleOutlined,
 } from '@ant-design/icons';
 import SettingsPanel from './SettingsPanel';
+import MeetingPanel from './MeetingPanel';
 import { DEFAULT_CONFIG, SUGGESTED_QUESTIONS } from '../shared/prompts';
 
 const { Header, Content, Footer } = Layout;
@@ -999,6 +1000,10 @@ function App() {
         </Modal>
 
         <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} onSave={setConfig} />
+
+        <div style={{ position: 'absolute', top: 80, right: 16, width: 360, zIndex: 10 }}>
+          <MeetingPanel accent={accent} />
+        </div>
 
         <style>{`
           @keyframes adminFloat {

@@ -160,6 +160,26 @@ interface CaptureAnalyzeResult {
   error?: string;
 }
 
+interface MeetingSegment {
+  id: string;
+  text: string;
+  timestamp: string;
+  startMs: number;
+}
+
+interface MeetingState {
+  id: string;
+  title: string;
+  startedAt: string;
+  endedAt?: string;
+  segments: MeetingSegment[];
+  rollingSummary: string;
+  finalSummary?: string;
+  transcriptPath?: string;
+  status: 'idle' | 'recording' | 'processing' | 'done' | 'error';
+  error?: string;
+}
+
 interface ElectronAPI {
   // 窗口控制
   toggleWindow: (mode: 'admin' | 'pet') => Promise<void>;
@@ -242,6 +262,15 @@ interface ElectronAPI {
   pinCreate: (content: string, messageId: string) => Promise<PinItem>;
   pinRemove: (pinId: string) => Promise<boolean>;
   pinList: () => Promise<PinItem[]>;
+
+  // 会议转录
+  meetingStart: (title: string) => Promise<{ success: boolean; state?: MeetingState; error?: string }>;
+  meetingEnd: () => Promise<{ success: boolean; state?: MeetingState; error?: string }>;
+  meetingCancel: () => Promise<{ success: boolean }>;
+  meetingGetState: () => Promise<MeetingState>;
+  onMeetingState: (callback: (state: MeetingState) => void) => () => void;
+  onMeetingSegment: (callback: (segment: MeetingSegment) => void) => () => void;
+  onMeetingRollingSummary: (callback: (summary: string) => void) => () => void;
 
   // 系统通知
   sendNotification: (title: string, body: string) => Promise<boolean>;

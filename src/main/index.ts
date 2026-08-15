@@ -17,6 +17,8 @@ import { chat, streamChat, testConnection, getModels, getProviderFromConfig, BUI
 import type { AIProvider, ChatRequest, ChatResponse } from './ai-providers';
 import { getToolDefinitions, getToolList, executeTool, toolRequiresConfirmation, parseToolCalls } from './mcp-tools';
 import type { ToolCall, ToolResult } from './mcp-tools';
+import { startMeeting, endMeeting, getMeetingState, cancelMeeting } from './meeting-transcriber';
+import type { MeetingState } from './meeting-transcriber';
 
 const isDev = process.env.NODE_ENV !== 'production' && !app.isPackaged;
 
@@ -1170,6 +1172,35 @@ ipcMain.handle('pin:remove', async (_, id: string) => {
 
 ipcMain.handle('pin:list', async () => {
   return loadPinCards();
+});
+
+// ---------- IPC: 会议转录 ----------
+ipcMain.handle('meeting:start', async (_, title: string) => {
+  try {
+    const cfg = loadConfigFromFile();
+    const state = await startMeeting(title || '', cfg.sttUrl || 'http://localhost:8084');
+    return { success: true, state };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('meeting:end', async () => {
+  try {
+    const state = await endMeeting();
+    return { success: true, state };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('meeting:cancel', async () => {
+  cancelMeeting();
+  return { success: true };
+});
+
+ipcMain.handle('meeting:getState', async () => {
+  return getMeetingState();
 });
 
 // ---------- IPC: 历史持久化 ----------
