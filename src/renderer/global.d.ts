@@ -133,6 +133,33 @@ interface AIModelsResult {
   error?: string;
 }
 
+interface ChatRequest {
+  messages: Array<{ role: string; content: string; images?: string[]; toolCalls?: any[]; toolCallId?: string }>;
+  model: string;
+  stream?: boolean;
+  tools?: any[];
+}
+
+interface ChatResponse {
+  content: string;
+  toolCalls?: any[];
+  toolResults?: any[];
+}
+
+interface ScreenshotWindowResult {
+  success: boolean;
+  path?: string;
+  imageBase64?: string;
+  error?: string;
+}
+
+interface CaptureAnalyzeResult {
+  success: boolean;
+  analysis?: string;
+  imageBase64?: string;
+  error?: string;
+}
+
 interface ElectronAPI {
   // 窗口控制
   toggleWindow: (mode: 'admin' | 'pet') => Promise<void>;
@@ -223,6 +250,9 @@ interface ElectronAPI {
   aiGetBuiltinProviders: () => Promise<AIProvider[]>;
   aiTestConnection: (provider: AIProvider) => Promise<AIConnectionTestResult>;
   aiGetModels: (provider: AIProvider) => Promise<AIModelsResult>;
+
+  // 按住快捷键停止
+  onPushToTalkStop: (callback: () => void) => () => void;
 
   // 日志
   log: (msg: string) => void;

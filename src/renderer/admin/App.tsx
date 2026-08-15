@@ -165,7 +165,7 @@ function App() {
           log('[Admin] 加载历史 ' + history.length + ' 条');
         }
         // 加载工具定义
-        const tools = await window.electronAPI?.toolsGetDefinitions();
+        const tools = await window.electronAPI?.toolsList();
         if (tools) {
           setToolDefinitions(tools);
           log('[Admin] 加载工具定义 ' + tools.length + ' 个');
