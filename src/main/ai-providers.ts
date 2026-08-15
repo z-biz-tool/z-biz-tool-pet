@@ -1,5 +1,3 @@
-import { BrowserWindow } from 'electron';
-
 // ==================== 类型定义 ====================
 
 export interface AIProvider {
@@ -487,7 +485,7 @@ async function streamOpenAICompatible(
         continue;
       }
       try {
-        const data = JSON.parse(dataStr);
+        const data: any = JSON.parse(dataStr);
         const delta = data.choices?.[0]?.delta?.content;
         if (delta) {
           fullContent += delta;
@@ -575,7 +573,7 @@ async function streamClaude(
         continue;
       }
       try {
-        const data = JSON.parse(dataStr);
+        const data: any = JSON.parse(dataStr);
         if (data.type === 'content_block_delta' && data.delta?.text) {
           fullContent += data.delta.text;
           sender('ai:streamChunk', { content: data.delta.text, done: false });
@@ -648,7 +646,7 @@ async function streamGemini(
       if (!trimmed.startsWith('data:')) continue;
       const dataStr = trimmed.slice(5).trim();
       try {
-        const data = JSON.parse(dataStr);
+        const data: any = JSON.parse(dataStr);
         const parts = data.candidates?.[0]?.content?.parts || [];
         for (const part of parts) {
           if (part.text) {
@@ -734,7 +732,7 @@ export async function getModels(provider: AIProvider): Promise<string[]> {
       case 'ollama': {
         const res = await fetch(`${provider.baseUrl}/api/tags`, { signal: AbortSignal.timeout(5000) });
         if (!res.ok) return provider.models;
-        const data = await res.json();
+        const data: any = await res.json();
         return (data.models || []).map((m: any) => m.name || m.model);
       }
       case 'openai':
@@ -750,8 +748,8 @@ export async function getModels(provider: AIProvider): Promise<string[]> {
           signal: AbortSignal.timeout(5000),
         });
         if (!res.ok) return provider.models;
-        const data = await res.json();
-        return (data.data || []).map((m: any) => m.id);
+        const data2: any = await res.json();
+        return (data2.data || []).map((m: any) => m.id);
       }
       case 'claude': {
         // Claude 没有公开的模型列表 API，返回预设
@@ -763,8 +761,8 @@ export async function getModels(provider: AIProvider): Promise<string[]> {
           { signal: AbortSignal.timeout(5000) }
         );
         if (!res.ok) return provider.models;
-        const data = await res.json();
-        return (data.models || [])
+        const data3: any = await res.json();
+        return (data3.models || [])
           .map((m: any) => m.name?.replace('models/', '') || m.name)
           .filter((n: string) => n.includes('gemini'));
       }

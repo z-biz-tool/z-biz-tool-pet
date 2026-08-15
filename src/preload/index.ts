@@ -18,6 +18,11 @@ export interface PetConfig {
   themeColor: string;
   currentSkinId?: string;
   stealthMode?: boolean;
+  aiProvider?: string;
+  aiApiKey?: string;
+  aiBaseUrl?: string;
+  aiModel?: string;
+  providers?: any[];
 }
 
 export interface PetSkin {
@@ -49,6 +54,31 @@ export interface PetStats {
   isSick: boolean;
 }
 
+export interface AIProvider {
+  id: string;
+  name: string;
+  type: 'ollama' | 'openai' | 'claude' | 'gemini' | 'deepseek' | 'qwen' | 'custom';
+  baseUrl: string;
+  apiKey?: string;
+  models: string[];
+  supportsVision: boolean;
+  supportsStreaming: boolean;
+  supportsTools: boolean;
+}
+
+export interface ChatRequest {
+  messages: Array<{ role: string; content: string; images?: string[] }>;
+  model: string;
+  stream?: boolean;
+  tools?: any[];
+}
+
+export interface ChatResponse {
+  content: string;
+  toolCalls?: any[];
+  toolResults?: any[];
+}
+
 contextBridge.exposeInMainWorld('electronAPI', {
   // 窗口控制
   toggleWindow: (mode: 'admin' | 'pet') => ipcRenderer.invoke('window:toggle', mode),
@@ -75,8 +105,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 截图
   captureScreenshot: () => ipcRenderer.invoke('screenshot:capture'),
+  captureWindow: (windowName?: string) => ipcRenderer.invoke('screenshot:captureWindow', windowName),
+  captureAndAnalyze: (question?: string) => ipcRenderer.invoke('screenshot:captureAndAnalyze', question),
 
-  // 对话历史持久化（新版：文件存储）
+  // 对话历史持久化
   saveHistory: (messages: ChatMessage[]) => ipcRenderer.invoke('history:save', messages),
   loadHistory: () => ipcRenderer.invoke('history:load'),
   clearHistory: () => ipcRenderer.invoke('history:clear'),
@@ -107,7 +139,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('pet:applySkinTheme', skinData),
   onApplySkin: (callback: (skin: PetSkin) => void) => {
     ipcRenderer.on('pet:applySkin', (_, skinId: string) => {
-      // 通过skinId获取完整皮肤数据
       ipcRenderer.invoke('pet:getSkins').then((skins: PetSkin[]) => {
         const skin = skins.find((s: PetSkin) => s.id === skinId);
         if (skin) callback(skin);
@@ -132,6 +163,52 @@ contextBridge.exposeInMainWorld('electronAPI', {
   petSleep: () => ipcRenderer.invoke('pet:sleep'),
   petMedicine: () => ipcRenderer.invoke('pet:medicine'),
   petPet: () => ipcRenderer.invoke('pet:pet'),
+
+  // ---------- AI引擎 IPC ----------
+  aiChat: (request: ChatRequest) => ipcRenderer.invoke('ai:chat', request),
+  aiTestConnection: (providerConfig?: AIProvider) => ipcRenderer.invoke('ai:testConnection', providerConfig),
+  aiGetModels: (providerConfig?: AIProvider) => ipcRenderer.invoke('ai:getModels', providerConfig),
+  aiStreamChat: (request: ChatRequest) => ipcRenderer.invoke('ai:streamChat', request),
+  aiGetBuiltinProviders: () => ipcRenderer.invoke('ai:getBuiltinProviders'),
+  onAiStreamChunk: (callback: (chunk: { content: string; done: boolean }) => void) => {
+    ipcRenderer.on('ai:streamChunk', (_, chunk) => callback(chunk));
+    return () => ipcRenderer.removeListener('ai:streamChunk', callback as any);
+  },
+
+  // ---------- MCP工具 IPC ----------
+  toolsList: () => ipcRenderer.invoke('tools:list'),
+  toolsExecute: (name: string, params: any) => ipcRenderer.invoke('tools:execute', name, params),
+  toolsConfirm: (toolCallId: string, confirmed: boolean) => ipcRenderer.invoke('tools:confirm', toolCallId, confirmed),
+  onToolsConfirmRequest: (callback: (data: { toolCallId: string; name: string; arguments: any }) => void) => {
+    ipcRenderer.on('tools:confirmRequest', (_, data) => callback(data));
+    return () => ipcRenderer.removeListener('tools:confirmRequest', callback as any);
+  },
+
+  // ---------- 语音打断 IPC ----------
+  voiceInterrupt: () => ipcRenderer.invoke('voice:interrupt'),
+  onVoiceInterrupt: (callback: () => void) => {
+    ipcRenderer.on('voice:interrupt', callback);
+    return () => ipcRenderer.removeListener('voice:interrupt', callback);
+  },
+
+  // ---------- 按住说话 IPC ----------
+  onPushToTalkStart: (callback: () => void) => {
+    ipcRenderer.on('voice:pushToTalkStart', callback);
+    return () => ipcRenderer.removeListener('voice:pushToTalkStart', callback);
+  },
+  onPushToTalkStop: (callback: () => void) => {
+    ipcRenderer.on('voice:pushToTalkStop', callback);
+    return () => ipcRenderer.removeListener('voice:pushToTalkStop', callback);
+  },
+
+  // ---------- 文件读取 IPC ----------
+  fileRead: (filePath: string) => ipcRenderer.invoke('file:read', filePath),
+  fileReadAsBase64: (filePath: string) => ipcRenderer.invoke('file:readAsBase64', filePath),
+
+  // ---------- Pin卡片 IPC ----------
+  pinCreate: (content: string) => ipcRenderer.invoke('pin:create', content),
+  pinRemove: (id: string) => ipcRenderer.invoke('pin:remove', id),
+  pinList: () => ipcRenderer.invoke('pin:list'),
 
   // 日志
   log: (msg: string) => ipcRenderer.send('log', msg),

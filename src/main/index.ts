@@ -13,6 +13,10 @@ import {
 import * as path from 'path';
 import * as fs from 'fs';
 import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
+import { chat, streamChat, testConnection, getModels, getProviderFromConfig, BUILTIN_PROVIDERS } from './ai-providers';
+import type { AIProvider, ChatRequest, ChatResponse } from './ai-providers';
+import { getToolDefinitions, getToolList, executeTool, toolRequiresConfirmation, parseToolCalls } from './mcp-tools';
+import type { ToolCall, ToolResult } from './mcp-tools';
 
 const isDev = process.env.NODE_ENV !== 'production' && !app.isPackaged;
 
@@ -803,17 +807,364 @@ ipcMain.handle('screenshot:capture', async () => {
       return { success: false, error: '无法获取屏幕截图' };
     }
 
-    const imageBuffer = mainSource.thumbnail.toPNG();
+    // 转为JPEG base64（压缩到500KB以内）
+    const jpegBuffer = mainSource.thumbnail.toJPEG(80);
+    const imageBase64 = jpegBuffer.toString('base64');
+
+    // 同时保存文件
     const tempDir = app.getPath('temp');
-    const screenshotPath = path.join(tempDir, `zbot_screenshot_${Date.now()}.png`);
-    fs.writeFileSync(screenshotPath, imageBuffer);
+    const screenshotPath = path.join(tempDir, `zbot_screenshot_${Date.now()}.jpg`);
+    fs.writeFileSync(screenshotPath, jpegBuffer);
     console.log('[Z-Bot Main] 截图保存成功:', screenshotPath);
 
-    return { success: true, path: screenshotPath };
+    return { success: true, path: screenshotPath, imageBase64 };
   } catch (error: any) {
     console.error('[Z-Bot Main] 截图失败:', error.message);
     return { success: false, error: error.message };
   }
+});
+
+// ---------- IPC: 截取指定窗口 ----------
+ipcMain.handle('screenshot:captureWindow', async (_, windowName?: string) => {
+  try {
+    const sources = await desktopCapturer.getSources({
+      types: ['window'],
+      thumbnailSize: { width: 1920, height: 1080 },
+    });
+    const source = windowName
+      ? sources.find(s => s.name.includes(windowName))
+      : sources[0];
+    if (!source?.thumbnail) {
+      return { success: false, error: '未找到目标窗口' };
+    }
+    const jpegBuffer = source.thumbnail.toJPEG(80);
+    const imageBase64 = jpegBuffer.toString('base64');
+    return { success: true, imageBase64, windowName: source.name };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+// ---------- IPC: 截图+AI分析 ----------
+ipcMain.handle('screenshot:captureAndAnalyze', async (_, question?: string) => {
+  try {
+    const captureResult = await desktopCapturer.getSources({
+      types: ['screen'],
+      thumbnailSize: { width: 1920, height: 1080 },
+    });
+    const mainSource = captureResult[0];
+    if (!mainSource?.thumbnail) {
+      return { success: false, error: '无法获取屏幕截图' };
+    }
+    const jpegBuffer = mainSource.thumbnail.toJPEG(80);
+    const imageBase64 = jpegBuffer.toString('base64');
+
+    // 获取当前AI配置
+    const config = loadConfigFromFile();
+    const provider = getProviderFromConfig(config as any);
+
+    if (!provider.supportsVision) {
+      return { success: false, error: '当前AI引擎不支持视觉分析，请切换到支持Vision的模型' };
+    }
+
+    const request: ChatRequest = {
+      messages: [
+        { role: 'system', content: config.systemPrompt || DEFAULT_CONFIG.systemPrompt },
+        {
+          role: 'user',
+          content: question || '请描述一下你看到的屏幕内容，简要说明当前正在做什么。',
+          images: [imageBase64],
+        },
+      ],
+      model: config.aiModel || config.modelName,
+      stream: false,
+    };
+
+    const response = await chat(provider, request);
+    return { success: true, analysis: response.content, imageBase64 };
+  } catch (error: any) {
+    console.error('[Z-Bot Main] 截图分析失败:', error.message);
+    return { success: false, error: error.message };
+  }
+});
+
+// ---------- IPC: AI引擎 ----------
+ipcMain.handle('ai:chat', async (_, request: ChatRequest) => {
+  try {
+    const config = loadConfigFromFile();
+    const provider = getProviderFromConfig(config as any);
+    const req: ChatRequest = {
+      ...request,
+      model: request.model || config.aiModel || config.modelName,
+    };
+    // 注入工具定义
+    if (provider.supportsTools) {
+      req.tools = getToolDefinitions();
+    }
+    const response = await chat(provider, req);
+
+    // 处理工具调用
+    if (response.toolCalls && response.toolCalls.length > 0) {
+      const toolResults: ToolResult[] = [];
+      for (const tc of response.toolCalls) {
+        const toolCall: ToolCall = {
+          id: tc.id || `call_${Date.now()}`,
+          name: tc.function?.name || tc.name || '',
+          arguments: typeof tc.function?.arguments === 'string'
+            ? JSON.parse(tc.function.arguments)
+            : tc.function?.arguments || {},
+        };
+
+        // 检查是否需要用户确认
+        if (toolRequiresConfirmation(toolCall.name)) {
+          // 发送到渲染进程请求确认
+          const confirmed = await new Promise<boolean>((resolve) => {
+            const timeout = setTimeout(() => resolve(false), 60000);
+            const handler = (_: any, result: { toolCallId: string; confirmed: boolean }) => {
+              if (result.toolCallId === toolCall.id) {
+                clearTimeout(timeout);
+                ipcMain.removeListener('tools:confirmResult', handler);
+                resolve(result.confirmed);
+              }
+            };
+            ipcMain.on('tools:confirmResult', handler);
+            // 通知渲染进程显示确认对话框
+            adminWindow?.webContents.send('tools:confirmRequest', {
+              toolCallId: toolCall.id,
+              name: toolCall.name,
+              arguments: toolCall.arguments,
+            });
+            petWindow?.webContents.send('tools:confirmRequest', {
+              toolCallId: toolCall.id,
+              name: toolCall.name,
+              arguments: toolCall.arguments,
+            });
+          });
+          if (!confirmed) {
+            toolResults.push({
+              toolCallId: toolCall.id,
+              result: '用户拒绝了此操作',
+              isError: true,
+            });
+            continue;
+          }
+        }
+
+        // 执行工具
+        const result = await executeTool(toolCall.name, toolCall.arguments);
+        result.toolCallId = toolCall.id;
+        toolResults.push(result);
+
+        // 特殊处理: control_pet 触发动画
+        if (toolCall.name === 'control_pet') {
+          const action = toolCall.arguments.action;
+          petWindow?.webContents.send('pet:triggerAnimation', action);
+          adminWindow?.webContents.send('pet:triggerAnimation', action);
+          if (toolCall.arguments.color) {
+            petWindow?.webContents.send('pet:applySkinData', {
+              id: 'ai-theme',
+              name: 'AI主题',
+              colors: {
+                body: toolCall.arguments.color,
+                bodyLight: toolCall.arguments.color,
+                bodyDark: toolCall.arguments.color,
+                eye: '#fff',
+                blush: 'rgba(255,105,180,0.5)',
+                accent: toolCall.arguments.color,
+              },
+              isCustom: true,
+            });
+          }
+        }
+      }
+
+      // 将工具结果发回AI继续对话
+      const toolMessages = toolResults.map(tr => ({
+        role: 'tool' as const,
+        content: tr.result,
+        toolCallId: tr.toolCallId,
+      }));
+      const followUpRequest: ChatRequest = {
+        messages: [
+          ...request.messages,
+          { role: 'assistant' as const, content: response.content || '', toolCalls: response.toolCalls },
+          ...toolMessages.map(tm => ({ role: 'tool' as const, content: tm.content })),
+        ],
+        model: req.model,
+        stream: false,
+      };
+      const followUpResponse = await chat(provider, followUpRequest);
+      return { ...followUpResponse, toolResults };
+    }
+
+    return response;
+  } catch (error: any) {
+    console.error('[Z-Bot Main] AI聊天错误:', error.message);
+    return { content: `抱歉，AI请求失败: ${error.message}`, toolCalls: undefined };
+  }
+});
+
+ipcMain.handle('ai:testConnection', async (_, providerConfig?: AIProvider) => {
+  try {
+    if (providerConfig) {
+      return await testConnection(providerConfig);
+    }
+    const config = loadConfigFromFile();
+    const provider = getProviderFromConfig(config as any);
+    return await testConnection(provider);
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('ai:getModels', async (_, providerConfig?: AIProvider) => {
+  try {
+    if (providerConfig) {
+      return await getModels(providerConfig);
+    }
+    const config = loadConfigFromFile();
+    const provider = getProviderFromConfig(config as any);
+    return await getModels(provider);
+  } catch {
+    return [];
+  }
+});
+
+ipcMain.handle('ai:streamChat', async (_, request: ChatRequest) => {
+  try {
+    const config = loadConfigFromFile();
+    const provider = getProviderFromConfig(config as any);
+    const req: ChatRequest = {
+      ...request,
+      model: request.model || config.aiModel || config.modelName,
+    };
+    const sender = (event: string, data: any) => {
+      adminWindow?.webContents.send(event, data);
+      petWindow?.webContents.send(event, data);
+    };
+    return await streamChat(provider, req, sender);
+  } catch (error: any) {
+    return { content: `流式请求失败: ${error.message}` };
+  }
+});
+
+ipcMain.handle('ai:getBuiltinProviders', async () => {
+  return BUILTIN_PROVIDERS;
+});
+
+// ---------- IPC: MCP工具 ----------
+ipcMain.handle('tools:list', async () => {
+  return getToolList();
+});
+
+ipcMain.handle('tools:execute', async (_, name: string, params: any) => {
+  return await executeTool(name, params);
+});
+
+ipcMain.handle('tools:confirm', async (_, toolCallId: string, confirmed: boolean) => {
+  ipcMain.emit('tools:confirmResult', {}, { toolCallId, confirmed });
+  return true;
+});
+
+// ---------- IPC: 语音打断 ----------
+ipcMain.handle('voice:interrupt', async () => {
+  adminWindow?.webContents.send('voice:interrupt');
+  petWindow?.webContents.send('voice:interrupt');
+  return true;
+});
+
+// ---------- IPC: 按住说话快捷键 ----------
+let pushToTalkActive = false;
+ipcMain.handle('voice:pushToTalkStatus', async () => {
+  return pushToTalkActive;
+});
+
+// 注册按住说话快捷键 (右Option/右Alt)
+function registerPushToTalk() {
+  const ret = globalShortcut.register('Alt+Shift+V', () => {
+    pushToTalkActive = true;
+    adminWindow?.webContents.send('voice:pushToTalkStart');
+    petWindow?.webContents.send('voice:pushToTalkStart');
+  });
+  // 松开检测通过另一个快捷键或定时器
+  // 简化实现: 用Cmd+Shift+V停止
+  const ret2 = globalShortcut.register('Alt+Shift+C', () => {
+    pushToTalkActive = false;
+    adminWindow?.webContents.send('voice:pushToTalkStop');
+    petWindow?.webContents.send('voice:pushToTalkStop');
+  });
+  if (ret && ret2) {
+    console.log('[Z-Bot Main] 按住说话快捷键已注册: Alt+Shift+V 开始, Alt+Shift+C 停止');
+  }
+}
+
+// ---------- IPC: 文件读取 ----------
+ipcMain.handle('file:read', async (_, filePath: string) => {
+  try {
+    if (!fs.existsSync(filePath)) {
+      return { success: false, error: '文件不存在' };
+    }
+    const content = fs.readFileSync(filePath, 'utf-8');
+    return { success: true, content: content.slice(0, 50000) }; // 限制50KB
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('file:readAsBase64', async (_, filePath: string) => {
+  try {
+    if (!fs.existsSync(filePath)) {
+      return { success: false, error: '文件不存在' };
+    }
+    const content = fs.readFileSync(filePath);
+    const ext = path.extname(filePath).toLowerCase();
+    const mimeType = ext === '.png' ? 'image/png' : ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : ext === '.gif' ? 'image/gif' : ext === '.webp' ? 'image/webp' : 'application/octet-stream';
+    const base64 = content.toString('base64');
+    return { success: true, base64, mimeType, dataUrl: `data:${mimeType};base64,${base64}` };
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+});
+
+// ---------- IPC: Pin卡片 ----------
+interface PinCard {
+  id: string;
+  content: string;
+  createdAt: string;
+  conversationId?: string;
+}
+
+const pinCardsFile = path.join(dataDir, 'pins.json');
+
+function loadPinCards(): PinCard[] {
+  try {
+    if (!fs.existsSync(pinCardsFile)) return [];
+    return JSON.parse(fs.readFileSync(pinCardsFile, 'utf-8'));
+  } catch { return []; }
+}
+
+function savePinCards(pins: PinCard[]) {
+  ensureDataDir();
+  fs.writeFileSync(pinCardsFile, JSON.stringify(pins, null, 2), 'utf-8');
+}
+
+ipcMain.handle('pin:create', async (_, content: string) => {
+  const pins = loadPinCards();
+  const pin: PinCard = { id: Date.now().toString(), content, createdAt: new Date().toISOString() };
+  pins.push(pin);
+  savePinCards(pins);
+  return pin;
+});
+
+ipcMain.handle('pin:remove', async (_, id: string) => {
+  let pins = loadPinCards();
+  pins = pins.filter(p => p.id !== id);
+  savePinCards(pins);
+  return true;
+});
+
+ipcMain.handle('pin:list', async () => {
+  return loadPinCards();
 });
 
 // ---------- IPC: 历史持久化 ----------
@@ -957,6 +1308,7 @@ app.whenReady().then(() => {
   createPetWindow();
   createTray();
   registerShortcuts();
+  registerPushToTalk();
 
   // 随机处理外链
   app.on('browser-window-created', (_, window) => {

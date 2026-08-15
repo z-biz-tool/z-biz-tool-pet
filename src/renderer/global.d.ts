@@ -19,6 +19,23 @@ interface PetConfig {
   themeColor: string;
   currentSkinId?: string;
   stealthMode?: boolean;
+  aiProvider?: string;
+  aiBaseUrl?: string;
+  aiApiKey?: string;
+  aiModel?: string;
+  providers?: AIProvider[];
+}
+
+interface AIProvider {
+  id: string;
+  name: string;
+  type: 'ollama' | 'openai' | 'claude' | 'gemini' | 'deepseek' | 'qwen' | 'custom';
+  baseUrl: string;
+  apiKey?: string;
+  models: string[];
+  supportsVision: boolean;
+  supportsStreaming: boolean;
+  supportsTools: boolean;
 }
 
 interface PetSkin {
@@ -61,6 +78,61 @@ interface CursorPosition {
   y: number;
 }
 
+interface ToolCall {
+  id: string;
+  name: string;
+  arguments: Record<string, any>;
+}
+
+interface ToolResult {
+  toolCallId: string;
+  result: string;
+  isError: boolean;
+}
+
+interface ToolInfo {
+  name: string;
+  description: string;
+  requiresConfirmation: boolean;
+}
+
+interface ToolConfirmRequest {
+  id: string;
+  name: string;
+  arguments: Record<string, any>;
+}
+
+interface PinItem {
+  id: string;
+  content: string;
+  messageId: string;
+  createdAt: string;
+}
+
+interface FileReadResult {
+  success: boolean;
+  content?: string;
+  error?: string;
+}
+
+interface FileBase64Result {
+  success: boolean;
+  base64?: string;
+  mimeType?: string;
+  error?: string;
+}
+
+interface AIConnectionTestResult {
+  success: boolean;
+  error?: string;
+}
+
+interface AIModelsResult {
+  success: boolean;
+  models?: string[];
+  error?: string;
+}
+
 interface ElectronAPI {
   // 窗口控制
   toggleWindow: (mode: 'admin' | 'pet') => Promise<void>;
@@ -76,6 +148,13 @@ interface ElectronAPI {
   // 语音事件
   onVoiceStart: (callback: () => void) => () => void;
   onVoiceStop: (callback: () => void) => () => void;
+
+  // 语音打断
+  onVoiceInterrupt: (callback: () => void) => () => void;
+  sendVoiceInterrupt: () => void;
+
+  // 按住快捷键说话
+  onPushToTalkStart: (callback: () => void) => () => void;
 
   // 截图
   captureScreenshot: () => Promise<ScreenshotResult>;
@@ -118,6 +197,32 @@ interface ElectronAPI {
   petSleep: () => Promise<PetStats>;
   petMedicine: () => Promise<PetStats>;
   petPet: () => Promise<PetStats>;
+
+  // MCP 工具调用
+  toolsList: () => Promise<ToolInfo[]>;
+  toolsGetDefinitions: () => Promise<any[]>;
+  toolsRequiresConfirmation: (toolName: string) => Promise<boolean>;
+  toolsExecute: (toolCall: ToolCall) => Promise<ToolResult>;
+  toolsConfirm: (toolCallId: string, alwaysAllow: boolean) => void;
+  toolsCancel: (toolCallId: string) => void;
+  onToolsConfirmRequest: (callback: (data: ToolConfirmRequest) => void) => () => void;
+
+  // 文件读取
+  fileRead: (filePath: string) => Promise<FileReadResult>;
+  fileReadAsBase64: (filePath: string) => Promise<FileBase64Result>;
+
+  // Pin 卡片
+  pinCreate: (content: string, messageId: string) => Promise<PinItem>;
+  pinRemove: (pinId: string) => Promise<boolean>;
+  pinList: () => Promise<PinItem[]>;
+
+  // 系统通知
+  sendNotification: (title: string, body: string) => Promise<boolean>;
+
+  // AI 提供商
+  aiGetBuiltinProviders: () => Promise<AIProvider[]>;
+  aiTestConnection: (provider: AIProvider) => Promise<AIConnectionTestResult>;
+  aiGetModels: (provider: AIProvider) => Promise<AIModelsResult>;
 
   // 日志
   log: (msg: string) => void;
