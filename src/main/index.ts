@@ -19,6 +19,14 @@ import { getToolDefinitions, getToolList, executeTool, toolRequiresConfirmation,
 import type { ToolCall, ToolResult } from './mcp-tools';
 import { startMeeting, endMeeting, getMeetingState, cancelMeeting } from './meeting-transcriber';
 import type { MeetingState } from './meeting-transcriber';
+import { registerShortcuts as registerShortcutsNew } from './shortcut-manager';
+import { initMemory, extractMemoryFromConversation } from './memory-system';
+import { initQuickCommands, getQuickCommands, checkQuickCommand } from './quick-commands';
+import { SceneryManager, autoSwitchSceneryByTime, SCENERY_ANIMATION_KEYFRAMES } from './scenery-system';
+import { particleGenerator, PARTICLE_STYLES } from './particle-system';
+import { AchievementManager, ACHIEVEMENTS, resetAchievements } from './achievement-system';
+import { PersonaManager, PRESET_PERSONAS, buildSystemPrompt } from './persona-system';
+import { TaskManager, initTasks, DEFAULT_TASKS, startTaskScheduler, stopTaskScheduler } from './task-system';
 
 const isDev = process.env.NODE_ENV !== 'production' && !app.isPackaged;
 
@@ -62,6 +70,15 @@ interface PetConfig {
   aiBaseUrl?: string;
   aiModel?: string;
   providers?: any[];
+  
+  // 新功能配置
+  quickCommands?: any[];
+  memoryEnabled?: boolean;
+  sceneryEnabled?: boolean;
+  particleEnabled?: boolean;
+  taskSchedulerEnabled?: boolean;
+  autoSwitchScenery?: boolean;
+  autoExtractMemory?: boolean;
 }
 
 // ---------- 宠物养成系统 ----------
@@ -105,6 +122,13 @@ const DEFAULT_CONFIG: PetConfig = {
   petName: 'Z-Bot 小猫咪',
   themeColor: '#722ed1',
   stealthMode: true,
+  // 新功能默认配置
+  memoryEnabled: true,
+  sceneryEnabled: true,
+  particleEnabled: true,
+  taskSchedulerEnabled: true,
+  autoSwitchScenery: true,
+  autoExtractMemory: true,
 };
 
 // ---------- 持久化目录 ----------
@@ -910,6 +934,13 @@ ipcMain.handle('ai:chat', async (_, request: ChatRequest) => {
     }
     const response = await chat(provider, req);
 
+    // 检查是否匹配快捷指令
+    const matchedCommand = checkQuickCommand(request.messages[request.messages.length - 1]?.content || '');
+    if (matchedCommand) {
+      console.log('[Z-Bot Main] 匹配到快捷指令:', matchedCommand.name);
+      return { content: matchedCommand.response, toolCalls: undefined };
+    }
+
     // 处理工具调用
     if (response.toolCalls && response.toolCalls.length > 0) {
       const toolResults: ToolResult[] = [];
@@ -1004,12 +1035,34 @@ ipcMain.handle('ai:chat', async (_, request: ChatRequest) => {
       return { ...followUpResponse, toolResults };
     }
 
-    return response;
+    // 返回最终响应
+    const finalResponse = response.toolCalls ? { ...followUpResponse, toolResults } : response;
+    
+    // 提取用户信息到记忆系统
+    extractMemoryFromConversation(request.messages);
+    
+    return finalResponse;
   } catch (error: any) {
     console.error('[Z-Bot Main] AI聊天错误:', error.message);
     return { content: `抱歉，AI请求失败: ${error.message}`, toolCalls: undefined };
   }
 });
+
+// 记忆提取定时器 - 每5分钟检查一次
+let memoryExtractTimer: NodeJS.Timeout | null = null;
+
+// 开始记忆提取定时器
+function startMemoryExtractTimer() {
+  if (memoryExtractTimer) {
+    clearInterval(memoryExtractTimer);
+  }
+  memoryExtractTimer = setInterval(() => {
+    if (inMemoryHistory.length > 0) {
+      extractMemoryFromConversation(inMemoryHistory.slice(-20)); // 提取最近20条
+    }
+  }, 5 * 60 * 1000); // 5分钟
+  console.log('[Z-Bot Main] 记忆提取定时器已启动');
+}
 
 ipcMain.handle('ai:testConnection', async (_, providerConfig?: AIProvider) => {
   try {
@@ -1078,6 +1131,27 @@ ipcMain.handle('voice:interrupt', async () => {
   adminWindow?.webContents.send('voice:interrupt');
   petWindow?.webContents.send('voice:interrupt');
   return true;
+});
+
+// ---------- IPC: 快捷键事件 ----------
+ipcMain.on('shortcut:screenshot', () => {
+  adminWindow?.webContents.send('shortcut:screenshot');
+  petWindow?.webContents.send('shortcut:screenshot');
+});
+
+ipcMain.on('shortcut:note', () => {
+  adminWindow?.webContents.send('shortcut:note');
+  petWindow?.webContents.send('shortcut:note');
+});
+
+ipcMain.on('shortcut:translateWord', () => {
+  adminWindow?.webContents.send('shortcut:translateWord');
+  petWindow?.webContents.send('shortcut:translateWord');
+});
+
+ipcMain.on('shortcut:whisperStart', () => {
+  adminWindow?.webContents.send('shortcut:whisperStart');
+  petWindow?.webContents.send('shortcut:whisperStart');
 });
 
 // ---------- IPC: 按住说话快捷键 ----------
@@ -1332,6 +1406,14 @@ app.whenReady().then(() => {
   savePetStatsToFile(petStats);
   console.log('[Z-Bot Main] 宠物状态已加载, stage:', petStats.stage, 'age:', petStats.age);
 
+  // 初始化各种系统
+  initMemory(dataDir);
+  initQuickCommands();
+  initTasks();
+  autoSwitchSceneryByTime();
+  startMemoryExtractTimer();
+  startTaskScheduler();
+
   // 加载隐身模式配置
   const savedConfig = loadConfigFromFile();
   if (savedConfig.stealthMode !== undefined) {
@@ -1343,7 +1425,7 @@ app.whenReady().then(() => {
   createAdminWindow();
   createPetWindow();
   createTray();
-  registerShortcuts();
+  registerShortcutsNew();
   registerPushToTalk();
 
   // 随机处理外链
@@ -1372,6 +1454,7 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => {
   (app as any).isQuitting = true;
   stopServers();
+  stopTaskScheduler();
   globalShortcut.unregisterAll();
 });
 

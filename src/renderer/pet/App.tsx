@@ -67,6 +67,20 @@ function App() {
   const [currentSkin, setCurrentSkin] = useState<PetSkin>(PRESET_SKINS[0]);
   const [skinVars, setSkinVars] = useState<Record<string, string>>(getSkinCSSVariables(PRESET_SKINS[0]));
 
+  // 场景和粒子状态
+  const [currentScenery, setCurrentScenery] = useState({
+    id: 'day',
+    name: '阳光明媚',
+    type: 'day',
+    backgroundColor: 'linear-gradient(135deg, #87CEEB 0%, #E0F7FA 100%)',
+    particleColor: '#FFD700',
+  });
+  const [particleEffects, setParticleEffects] = useState<{id: string, type: 'heart' | 'star' | 'music' | 'sparkle' | 'bounce' | 'float', content: string}[]>([
+    { id: 'heart', type: 'heart', content: '💕' },
+    { id: 'star', type: 'star', content: '✨' },
+    { id: 'music', type: 'music', content: '🎵' },
+  ]);
+
   // 右键菜单
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; show: boolean }>({ x: 0, y: 0, show: false });
   const [skinMenuOpen, setSkinMenuOpen] = useState(false);
@@ -143,6 +157,21 @@ function App() {
     const unsubSkin = window.electronAPI?.onApplySkin?.((skin: PetSkin) => {
       applySkin(skin);
     });
+    
+    // 加载场景和粒子设置
+    try {
+      const savedScenery = localStorage.getItem('current_scenery');
+      if (savedScenery) {
+        setCurrentScenery(JSON.parse(savedScenery));
+      }
+      
+      const savedParticles = localStorage.getItem('particle_settings');
+      if (savedParticles) {
+        setParticleEffects(JSON.parse(savedParticles));
+      }
+    } catch (e) {
+      log('[Pet] 加载场景设置失败');
+    }
 
     return () => {
       stopRecording();
@@ -660,6 +689,7 @@ function App() {
         userSelect: 'none',
         fontFamily: 'system-ui, -apple-system, "PingFang SC", sans-serif',
         cursor: 'grab',
+        background: currentScenery.backgroundColor,
         ...skinVars,
       }}
       onMouseDown={handleMouseDown}
@@ -669,6 +699,23 @@ function App() {
       onMouseEnter={() => setShowHUD(true)}
       onMouseLeave={() => { setShowHUD(false); setShowActions(false); }}
     >
+      {/* 场景粒子效果层 */}
+      <div className="particle-layer">
+        {particleEffects.filter(p => p.enabled !== false).map((particle, idx) => (
+          <div
+            key={`${particle.id}-${idx}`}
+            className={`particle ${particle.type}`}
+            style={{
+              left: `${20 + Math.random() * 60}%`,
+              animation: `particleFall ${3 + Math.random() * 3}s linear infinite`,
+              animationDelay: `${Math.random() * 2}s`,
+            }}
+          >
+            {particle.content}
+          </div>
+        ))}
+      </div>
+      
       {/* CSS 绘制的圆形萌宠角色 */}
       <div
         className={`pet-body ${EMOTION_CONFIGS[currentEmotion].cssClass} ${petStats.isSick ? 'pet-sick' : ''}`}
@@ -1116,6 +1163,31 @@ function App() {
           font-size: 16px;
           animation: animHeartFloat 1.5s ease-out forwards;
           pointer-events: none;
+        }
+
+        /* 场景粒子 */
+        .particle-layer {
+          position: absolute;
+          top: 0;
+          left: 0;
+          width: 100%;
+          height: 100%;
+          pointer-events: none;
+          overflow: hidden;
+          z-index: 0;
+        }
+        .particle {
+          position: absolute;
+          top: -20px;
+          font-size: 14px;
+          animation: particleFall 4s linear infinite;
+          pointer-events: none;
+          opacity: 0.8;
+        }
+        @keyframes particleFall {
+          0% { top: -20px; opacity: 0; transform: translateX(0); }
+          50% { opacity: 0.8; }
+          100% { top: 110%; opacity: 0; transform: translateX(20px); }
         }
 
         /* Zzz气泡 */

@@ -28,9 +28,14 @@ import {
   CheckCircleOutlined,
   CloseCircleOutlined,
   ExclamationCircleOutlined,
+  StarOutlined,
+  SunOutlined,
 } from '@ant-design/icons';
 import SettingsPanel from './SettingsPanel';
 import MeetingPanel from './MeetingPanel';
+import QuickCommandPanel from './QuickCommandPanel';
+import AchievementPanel from './AchievementPanel';
+import SceneryPanel from './SceneryPanel';
 import { DEFAULT_CONFIG, SUGGESTED_QUESTIONS } from '../shared/prompts';
 
 const { Header, Content, Footer } = Layout;
@@ -150,6 +155,11 @@ function App() {
 
   // 拖放文件状态
   const [isDragOver, setIsDragOver] = useState(false);
+  
+  // 面板状态
+  const [quickCommandOpen, setQuickCommandOpen] = useState(false);
+  const [achievementOpen, setAchievementOpen] = useState(false);
+  const [sceneryOpen, setSceneryOpen] = useState(false);
 
   const { token: themeToken } = antdTheme.useToken();
   const accent = config.themeColor || themeToken.colorPrimary;
@@ -221,6 +231,23 @@ function App() {
       });
     });
 
+    // 监听快捷键事件
+    const unsubShortcutScreenshot = window.electronAPI?.onShortcutScreenshot(() => {
+      captureScreenshot();
+    });
+    
+    const unsubShortcutNote = window.electronAPI?.onShortcutNote(() => {
+      message.info('快捷笔记功能（待实现）');
+    });
+    
+    const unsubShortcutTranslate = window.electronAPI?.onShortcutTranslateWord(() => {
+      message.info('翻译取词功能（待实现）');
+    });
+    
+    const unsubShortcutWhisper = window.electronAPI?.onShortcutWhisperStart(() => {
+      message.info('唤醒宠物功能（待实现）');
+    });
+
     // 检测 ollama 在线状态
     checkOnline();
     const onlineTimer = setInterval(checkOnline, 30000);
@@ -233,6 +260,10 @@ function App() {
       unsubInterrupt?.();
       unsubPushToTalk?.();
       unsubConfirm?.();
+      unsubShortcutScreenshot?.();
+      unsubShortcutNote?.();
+      unsubShortcutTranslate?.();
+      unsubShortcutWhisper?.();
       clearInterval(onlineTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -756,6 +787,15 @@ function App() {
             <Tooltip title="清空对话">
               <Button shape="circle" icon={<DeleteOutlined />} onClick={clearHistory} disabled={messages.length === 0} />
             </Tooltip>
+            <Tooltip title="快捷指令">
+              <Button shape="circle" icon={<ToolOutlined />} onClick={() => setQuickCommandOpen(true)} />
+            </Tooltip>
+            <Tooltip title="成就系统">
+              <Button shape="circle" icon={<StarOutlined />} onClick={() => setAchievementOpen(true)} />
+            </Tooltip>
+            <Tooltip title="场景特效">
+              <Button shape="circle" icon={<SunOutlined />} onClick={() => setSceneryOpen(true)} />
+            </Tooltip>
             <Tooltip title="设置">
               <Button shape="circle" icon={<SettingOutlined />} onClick={() => setSettingsOpen(true)} />
             </Tooltip>
@@ -1000,6 +1040,10 @@ function App() {
         </Modal>
 
         <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} onSave={setConfig} />
+        
+        <QuickCommandPanel open={quickCommandOpen} onClose={() => setQuickCommandOpen(false)} />
+        <AchievementPanel open={achievementOpen} onClose={() => setAchievementOpen(false)} />
+        <SceneryPanel open={sceneryOpen} onClose={() => setSceneryOpen(false)} />
 
         <div style={{ position: 'absolute', top: 80, right: 16, width: 360, zIndex: 10 }}>
           <MeetingPanel accent={accent} />

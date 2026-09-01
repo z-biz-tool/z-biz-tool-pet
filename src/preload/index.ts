@@ -191,6 +191,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('voice:interrupt', callback);
   },
 
+  // ---------- 快捷键事件 IPC ----------
+  onShortcutScreenshot: (callback: () => void) => {
+    ipcRenderer.on('shortcut:screenshot', callback);
+    return () => ipcRenderer.removeListener('shortcut:screenshot', callback);
+  },
+  onShortcutNote: (callback: () => void) => {
+    ipcRenderer.on('shortcut:note', callback);
+    return () => ipcRenderer.removeListener('shortcut:note', callback);
+  },
+  onShortcutTranslateWord: (callback: () => void) => {
+    ipcRenderer.on('shortcut:translateWord', callback);
+    return () => ipcRenderer.removeListener('shortcut:translateWord', callback);
+  },
+  onShortcutWhisperStart: (callback: () => void) => {
+    ipcRenderer.on('shortcut:whisperStart', callback);
+    return () => ipcRenderer.removeListener('shortcut:whisperStart', callback);
+  },
+
   // ---------- 按住说话 IPC ----------
   onPushToTalkStart: (callback: () => void) => {
     ipcRenderer.on('voice:pushToTalkStart', callback);
