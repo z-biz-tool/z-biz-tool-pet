@@ -1,7 +1,18 @@
-import { cronParser } from 'cron-parser';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-const execAsync = promisify(exec);
+import * as cronParser from 'cron-parser';
+
+// ---------- 任务动作投递通道 ----------
+// main 不是子进程，process.send 恒为 undefined（修复 D12）；
+// 由主进程注入真实的窗口 IPC 分发器与命令确认器。
+export interface TaskDispatcher {
+  dispatch: (payload: { type: string; content: string; taskName?: string }) => void;
+  requestCommandRun: (taskName: string, command: string) => Promise<{ ok: boolean; output?: string; error?: string }>;
+}
+
+let dispatcher: TaskDispatcher | null = null;
+
+export function setTaskDispatcher(d: TaskDispatcher): void {
+  dispatcher = d;
+}
 
 // 自动化任务系统
 export interface Task {
@@ -57,7 +68,7 @@ export interface SequenceTask extends Task {
 
 // 任务执行器
 export interface TaskExecutor {
-  execute(action: any): Promise<void>;
+  execute(action: any, task?: Task): Promise<void>;
 }
 
 // 任务管理
@@ -111,52 +122,41 @@ export const TaskManager: TaskManager = {
 
 // 任务执行器实现
 export const TaskExecutor: TaskExecutor = {
-  async execute(action: any): Promise<void> {
+  async execute(action: any, task?: Task): Promise<void> {
     console.log('[Task System] 执行任务动作:', action.type, action.content);
-    
+    const taskName = task?.name ?? '未命名任务';
+
     switch (action.type) {
       case 'speak':
-        console.log('[Task System] 说话:', action.content);
-        // 发送说话事件到渲染进程
-        if (process.send) {
-          process.send({ type: 'speak', content: action.content });
-        }
-        break;
-      
       case 'animation':
-        console.log('[Task System] 动画:', action.content);
-        // 发送动画事件到渲染进程
-        if (process.send) {
-          process.send({ type: 'animation', content: action.content });
-        }
-        break;
-      
       case 'changeScenery':
-        console.log('[Task System] 场景切换:', action.content);
-        // 发送场景切换事件到渲染进程
-        if (process.send) {
-          process.send({ type: 'changeScenery', content: action.content });
-        }
-        break;
-      
       case 'petAction':
-        console.log('[Task System] 宠物动作:', action.content);
-        // 发送宠物动作事件到渲染进程
-        if (process.send) {
-          process.send({ type: 'petAction', content: action.content });
+        // 经主进程注入的分发器送达窗口（修复 D12）
+        if (!dispatcher) {
+          console.warn('[Task System] 分发器未注入，动作被丢弃:', action.type);
+          return;
         }
+        console.log('[Task System] 投递动作到宠物窗口:', action.type);
+        dispatcher.dispatch({ type: action.type, content: action.content, taskName });
         break;
-      
-      case 'command':
-        console.log('[Task System] 执行系统命令:', action.content);
+
+      case 'command': {
+        // 高危动作：必须由主进程取得用户确认后才执行（修复 D03）
+        if (!dispatcher) {
+          console.error('[Task System] 未注入命令确认器，拒绝执行 shell 动作');
+          return;
+        }
         try {
-          const result = await execAsync(action.content);
-          console.log('[Task System] 命令执行成功:', result.stdout);
+          const result = await dispatcher.requestCommandRun(taskName, action.content);
+          if (result.ok) console.log('[Task System] 命令执行成功:', result.output?.trim());
+          else console.error('[Task System] 命令未执行或失败:', result.error);
         } catch (error: any) {
-          console.error('[Task System] 命令执行失败:', error.message);
+          // 调度器以 setInterval 触发且不 await，异常必须在此截住，否则变成 unhandled rejection
+          console.error('[Task System] 命令动作异常:', error.message);
         }
         break;
-      
+      }
+
       default:
         console.warn('[Task System] 未知动作类型:', action.type);
     }
@@ -178,7 +178,7 @@ function scheduleCronTask(task: CronTask): NodeJS.Timeout {
       
       if (diffMinutes <= 1 && (!lastRun || (now.getTime() - lastRun.getTime()) > 60000)) {
         // 执行任务
-        TaskExecutor.execute(task.action);
+        TaskExecutor.execute(task.action, task);
         lastRun = now;
       }
     } catch (error: any) {
@@ -192,7 +192,7 @@ function scheduleCronTask(task: CronTask): NodeJS.Timeout {
 // 定时任务调度器
 function scheduleTimerTask(task: TimerTask): NodeJS.Timeout {
   return setInterval(() => {
-    TaskExecutor.execute(task.action);
+    TaskExecutor.execute(task.action, task);
   }, task.interval);
 }
 

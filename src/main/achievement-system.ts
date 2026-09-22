@@ -208,7 +208,7 @@ export const AchievementManager: AchievementManager = {
 };
 
 // 获取未解锁的成就
-export function getUnlockedAchievements(history: AchievementHistory): Achievement[] {
+export function getUnlockedAchievements(_history: AchievementHistory): Achievement[] {
   return ACHIEVEMENTS.filter(a => a.unlocked);
 }
 

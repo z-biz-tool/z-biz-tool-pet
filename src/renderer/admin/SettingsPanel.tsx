@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Drawer, Form, Input, InputNumber, Button, Divider, Select, message, Space, Typography, Switch, Card, Tag, Popconfirm } from 'antd';
-import { SaveOutlined, ReloadOutlined, PlusOutlined, DeleteOutlined, ApiOutlined, CheckCircleOutlined, CloseCircleOutlined, LoadingOutlined, EyeOutlined } from '@ant-design/icons';
+import { Drawer, Form, Input, InputNumber, Button, Divider, Select, message, Space, Typography, Card, Tag, Popconfirm } from 'antd';
+import { SaveOutlined, ReloadOutlined, DeleteOutlined, ApiOutlined, CheckCircleOutlined, CloseCircleOutlined, LoadingOutlined, EyeOutlined } from '@ant-design/icons';
 import { DEFAULT_CONFIG, SCENE_PROMPTS } from '../shared/prompts';
 
 const { TextArea } = Input;
@@ -43,6 +43,20 @@ const PROVIDER_DEFAULTS: Record<string, { baseUrl: string; models: string[]; sup
   custom: { baseUrl: '', models: [], supportsVision: false },
 };
 
+interface SttModelInfo {
+  current: string;
+  modelsDir: string;
+  models: { id: string; path: string; installed: boolean }[];
+}
+
+interface ShortcutRow {
+  key: string;
+  label: string;
+  accelerator: string;
+  defaultAccelerator: string;
+  registered: boolean;
+}
+
 const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose, onSave }) => {
   const [form] = Form.useForm<PetConfig>();
   const [loading, setLoading] = useState(false);
@@ -52,6 +66,11 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose, onSave }) 
   const [connectionResult, setConnectionResult] = useState<{ success: boolean; error?: string } | null>(null);
   const [fetchingModels, setFetchingModels] = useState(false);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
+  const [sttInfo, setSttInfo] = useState<SttModelInfo | null>(null);
+  const [shortcutRows, setShortcutRows] = useState<ShortcutRow[]>([]);
+  const [updateText, setUpdateText] = useState<string>('尚未检查');
+  const [updateAvailable, setUpdateAvailable] = useState(false);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
 
   useEffect(() => {
     if (open) {
@@ -59,10 +78,84 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose, onSave }) 
     }
   }, [open]);
 
+  // 主进程检查到结果会推过来（启动时自动检查一次）
+  useEffect(() => {
+    const off = window.electronAPI?.onUpdateStatus?.((payload: any) => {
+      setUpdateText(describeUpdate(payload));
+      setUpdateAvailable(payload?.status === 'available' || payload?.status === 'downloaded');
+    });
+    return () => {
+      off?.();
+    };
+  }, []);
+
+  const describeUpdate = (r: any): string => {
+    if (!r) return '尚未检查';
+    switch (r.status) {
+      case 'available':
+        return '发现新版本 ' + (r.version || '');
+      case 'not-available':
+        return '已是最新版本';
+      case 'downloaded':
+        return '更新已下载，重启后生效';
+      case 'dev-mode':
+        return '开发模式下不检查更新';
+      case 'no-feed':
+        return '未配置发布源：设置 ZBOT_UPDATE_FEED_URL 或 ~/.z-bot/update-feed.json';
+      default:
+        return r.reason || '检查失败';
+    }
+  };
+
+  const handleCheckUpdate = async () => {
+    setCheckingUpdate(true);
+    try {
+      const r: any = await window.electronAPI?.updateCheck();
+      setUpdateText(describeUpdate(r));
+      setUpdateAvailable(r?.status === 'available' || r?.status === 'downloaded');
+    } finally {
+      setCheckingUpdate(false);
+    }
+  };
+
+  const handleInstallUpdate = async () => {
+    const r: any = await window.electronAPI?.updateInstall();
+    if (!r?.ok) message.error('安装失败: ' + (r?.reason || '未知错误'));
+  };
+
+  const loadRuntimeOptions = async () => {
+    const info = await window.electronAPI?.sttModels();
+    if (info) setSttInfo(info as SttModelInfo);
+    const rows = await window.electronAPI?.shortcutsList();
+    if (rows) setShortcutRows(rows as ShortcutRow[]);
+  };
+
+  const applyShortcuts = async () => {
+    const overrides: Record<string, string> = {};
+    shortcutRows.forEach((r) => {
+      overrides[r.key] = r.accelerator;
+    });
+    const res: any = await window.electronAPI?.shortcutsUpdate(overrides);
+    if (res?.ok) {
+      message.success('快捷键已更新');
+    } else {
+      const bad = [...(res?.failed || []), ...(res?.rejected || [])];
+      message.warning('部分快捷键未生效: ' + bad.join('、'));
+    }
+    await loadRuntimeOptions();
+  };
+
+  const reportApplied = (applied?: { sttModel?: boolean; shortcuts?: boolean }) => {
+    if (applied?.sttModel) message.success('语音识别服务已按新模型重启');
+    if (applied && applied.shortcuts === false) message.warning('部分快捷键注册失败，可能已被其他应用占用');
+    message.success('设置已保存');
+  };
+
   const loadConfig = async () => {
     setLoading(true);
     try {
       const config = await window.electronAPI?.loadConfig();
+      void loadRuntimeOptions();
       if (config) {
         form.setFieldsValue(config);
         setProviders(config.providers || []);
@@ -96,9 +189,10 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose, onSave }) 
         ...values,
         providers,
       };
-      await window.electronAPI?.saveConfig(configToSave);
+      const saved: any = await window.electronAPI?.saveConfig(configToSave);
       onSave(configToSave);
-      message.success('设置已保存');
+      reportApplied(saved?.applied);
+      await loadRuntimeOptions();
       onClose();
     } catch (e: any) {
       message.error('保存失败: ' + (e.message || '请检查表单'));
@@ -277,7 +371,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose, onSave }) 
           <Button icon={<ReloadOutlined />} onClick={handleReset} size="small">
             重置
           </Button>
-          <Button type="primary" icon={<SaveOutlined />} onClick={handleSave} size="small">
+          <Button type="primary" icon={<SaveOutlined />} onClick={handleSave} size="small" loading={loading}>
             保存
           </Button>
         </Space>
@@ -474,10 +568,84 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose, onSave }) 
           />
         </Form.Item>
 
-        <Divider plain />
-        <Text type="secondary" style={{ fontSize: 12 }}>
-          设置保存到 ~/.z-bot/config.json (权限600)，重启应用后生效。
-        </Text>
+        <Divider titlePlacement="left" plain>语音与快捷键</Divider>
+        <Form.Item
+          label="语音打断阈值"
+          name="interruptThreshold"
+          tooltip="播放语音时检测你是否插话的音量阈值（默认 30）。嘈杂环境调高，总是被误打断就调低。"
+        >
+          <InputNumber min={5} max={100} step={5} style={{ width: 180 }} addonAfter="/ 100" />
+        </Form.Item>
+
+        <Form.Item
+          label="STT 本地模型"
+          name="sttModel"
+          tooltip="whisper.cpp 的 GGML 模型；保存后语音识别子进程会自动重启生效"
+        >
+          <Select
+            options={(sttInfo?.models || []).map((m) => ({
+              value: m.id,
+              disabled: !m.installed,
+              label: (
+                <Space>
+                  <span>{'ggml-' + m.id + '.bin'}</span>
+                  <Tag color={m.installed ? 'green' : 'default'}>{m.installed ? '已下载' : '未下载'}</Tag>
+                </Space>
+              ),
+            }))}
+          />
+        </Form.Item>
+        {sttInfo && !sttInfo.models.some((m) => m.installed) && (
+          <Text type="warning" style={{ fontSize: 12 }}>
+            {sttInfo.modelsDir} 下没有模型，可执行 scripts/fetch-whisper-model.sh base 下载
+          </Text>
+        )}
+
+        <Divider titlePlacement="left" plain>更新</Divider>
+        <Space>
+          <Button size="small" loading={checkingUpdate} onClick={handleCheckUpdate}>
+            检查更新
+          </Button>
+          {updateAvailable && (
+            <Button size="small" type="primary" onClick={handleInstallUpdate}>
+              下载并安装
+            </Button>
+          )}
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            {updateText}
+          </Text>
+        </Space>
+
+        <Card
+          size="small"
+          title="全局快捷键"
+          style={{ marginTop: 12 }}
+          extra={
+            <Button size="small" onClick={applyShortcuts}>
+              应用快捷键
+            </Button>
+          }
+        >
+          {shortcutRows.map((row) => (
+            <Space key={row.key} style={{ display: 'flex', marginBottom: 6 }}>
+              <Text style={{ width: 120, display: 'inline-block' }}>{row.label}</Text>
+              <Input
+                size="small"
+                style={{ width: 210 }}
+                value={row.accelerator}
+                onChange={(e) =>
+                  setShortcutRows((prev) =>
+                    prev.map((r) => (r.key === row.key ? { ...r, accelerator: e.target.value } : r))
+                  )
+                }
+              />
+              <Tag color={row.registered ? 'blue' : 'red'}>{row.registered ? '已注册' : '未注册'}</Tag>
+            </Space>
+          ))}
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            格式如 CommandOrControl+Shift+Z；点击保存配置时也会按其中的 shortcuts 字段重新注册。
+          </Text>
+        </Card>
       </Form>
     </Drawer>
   );

@@ -1,8 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Table, Button, Tag, Typography, Space, Modal, Form, Input, Switch, message, Select } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, CheckCircleOutlined, ClockCircleOutlined } from '@ant-design/icons';
-
-const { Text } = Typography;
+import { Card, Table, Button, Tag, Space, Modal, Form, Input, Switch, message } from 'antd';
+import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 
 interface QuickCommand {
   id: string;
@@ -13,22 +11,12 @@ interface QuickCommand {
   createdAt: string;
 }
 
-interface QuickCommandManager {
-  commands: QuickCommand[];
-  load(): QuickCommand[];
-  save(commands: QuickCommand[]): void;
-  add(command: QuickCommand): void;
-  remove(id: string): void;
-  update(id: string, updates: Partial<QuickCommand>): void;
-  find(trigger: string): QuickCommand | undefined;
-}
-
 interface QuickCommandPanelProps {
   open: boolean;
   onClose: () => void;
 }
 
-const QuickCommandPanel: React.FC<QuickCommandPanelProps> = ({ open, onClose }) => {
+const QuickCommandPanel: React.FC<QuickCommandPanelProps> = ({ open }) => {
   const [commands, setCommands] = useState<QuickCommand[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingCommand, setEditingCommand] = useState<QuickCommand | null>(null);
@@ -181,7 +169,7 @@ const QuickCommandPanel: React.FC<QuickCommandPanelProps> = ({ open, onClose }) 
             label="回复内容"
             rules={[{ required: true, message: '请输入回复内容' }]}
           >
-            <TextArea rows={4} placeholder="例如：好的！让我帮你查一下天气~ 🌤️" />
+            <Input.TextArea rows={4} placeholder="例如：好的！让我帮你查一下天气~ 🌤️" />
           </Form.Item>
           <Form.Item
             name="enabled"

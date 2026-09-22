@@ -132,7 +132,9 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [config, setConfig] = useState<PetConfig>(DEFAULT_CONFIG);
   const [online, setOnline] = useState(false);
-  const [toolDefinitions, setToolDefinitions] = useState<any[]>([]);
+  // 流式回复归属：只把 chunk 写进这条气泡（T3.8）
+  const streamMsgIdRef = useRef<string | null>(null);
+  const streamBufRef = useRef('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
 
@@ -144,14 +146,21 @@ function App() {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const interruptAnimFrameRef = useRef<number | null>(null);
   const interruptThresholdRef = useRef(INTERRUPT_THRESHOLD);
+  // 设置面板改了打断阈值后立即生效，无需重开窗口（T4.9）
+  useEffect(() => {
+    interruptThresholdRef.current = config.interruptThreshold || INTERRUPT_THRESHOLD;
+  }, [config.interruptThreshold]);
 
-  // 工具确认对话框状态
+  // 工具确认对话框状态（字段与 main 的 tools:confirmRequest 契约一致）
   const [confirmModal, setConfirmModal] = useState<{
     visible: boolean;
     id: string;
     name: string;
     arguments: Record<string, any>;
-  }>({ visible: false, id: '', name: '', arguments: {} });
+    description: string;
+    riskLevel: number;
+    allowAlways: boolean;
+  }>({ visible: false, id: '', name: '', arguments: {}, description: '', riskLevel: 2, allowAlways: false });
 
   // 拖放文件状态
   const [isDragOver, setIsDragOver] = useState(false);
@@ -175,11 +184,10 @@ function App() {
           setMessages(history);
           log('[Admin] 加载历史 ' + history.length + ' 条');
         }
-        // 加载工具定义
+        // 加载工具定义（用于展示，工具执行本身在主进程 ai:chat 内完成）
         const tools = await window.electronAPI?.toolsList();
         if (tools) {
-          setToolDefinitions(tools);
-          log('[Admin] 加载工具定义 ' + tools.length + ' 个');
+          log('[Admin] 可用工具 ' + tools.length + ' 个');
         }
       } catch (e) {
         log('[Admin] 初始化失败');
@@ -221,13 +229,26 @@ function App() {
       }
     });
 
-    // 监听工具确认请求
+    // 监听工具确认请求：main 发的是 toolCallId，此前误读 data.id 导致确认框永远对不上号（D08）
+    const unsubChunk = window.electronAPI?.onAiStreamChunk((chunk) => {
+      const msgId = streamMsgIdRef.current;
+      if (!msgId || !chunk) return;
+      if (chunk.content) {
+        streamBufRef.current += chunk.content;
+        setMessages((prev) =>
+          prev.map((m) => (m.id === msgId ? { ...m, content: streamBufRef.current } : m))
+        );
+      }
+    });
     const unsubConfirm = window.electronAPI?.onToolsConfirmRequest((data) => {
       setConfirmModal({
         visible: true,
-        id: data.id,
+        id: data.toolCallId,
         name: data.name,
         arguments: data.arguments,
+        description: data.description ?? '',
+        riskLevel: data.riskLevel ?? 2,
+        allowAlways: !!data.allowAlways,
       });
     });
 
@@ -264,6 +285,7 @@ function App() {
       unsubShortcutNote?.();
       unsubShortcutTranslate?.();
       unsubShortcutWhisper?.();
+      unsubChunk?.();
       clearInterval(onlineTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -271,8 +293,9 @@ function App() {
 
   const checkOnline = async () => {
     try {
-      const res = await fetch(config.ollamaUrl + '/api/tags', { method: 'GET', signal: AbortSignal.timeout(3000) });
-      setOnline(res.ok);
+      // 由主进程探测所配置的 AI 提供商，渲染端不再直连 ollama（T3.6 收尾）
+      const res = await window.electronAPI?.aiTestConnection();
+      setOnline(!!res?.success);
     } catch {
       setOnline(false);
     }
@@ -388,55 +411,23 @@ function App() {
   };
 
   // ---------- MCP 工具调用处理 ----------
-  const handleToolCalls = async (toolCalls: any[], aiMsgId: string): Promise<string[]> => {
-    const results: string[] = [];
-    const toolCallStates: ToolCallState[] = toolCalls.map((tc) => ({
-      id: tc.id || `call_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-      name: tc.name || tc.function?.name || '',
-      arguments: typeof tc.function?.arguments === 'string'
-        ? JSON.parse(tc.function.arguments)
-        : tc.function?.arguments || tc.arguments || {},
-      status: 'pending' as const,
-    }));
-
-    // 更新消息中的工具调用状态
-    setMessages((prev) =>
-      prev.map((m) => (m.id === aiMsgId ? { ...m, toolCalls: [...toolCallStates] } : m))
-    );
-
-    for (let i = 0; i < toolCalls.length; i++) {
-      const tc = toolCallStates[i];
-      const toolCall: ToolCall = { id: tc.id, name: tc.name, arguments: tc.arguments };
-
-      // 更新状态为执行中
-      toolCallStates[i] = { ...tc, status: 'executing' };
-      setMessages((prev) =>
-        prev.map((m) => (m.id === aiMsgId ? { ...m, toolCalls: [...toolCallStates] } : m))
-      );
-
-      try {
-        const result = await window.electronAPI?.toolsExecute(toolCall);
-        if (result) {
-          toolCallStates[i] = {
-            ...toolCallStates[i],
-            status: result.isError ? 'error' : 'done',
-            result: result.result,
-          };
-          results.push(result.result);
-        }
-      } catch (e: any) {
-        toolCallStates[i] = { ...toolCallStates[i], status: 'error', result: e.message };
-        results.push(`工具执行错误: ${e.message}`);
-      }
-
-      // 更新状态
-      setMessages((prev) =>
-        prev.map((m) => (m.id === aiMsgId ? { ...m, toolCalls: [...toolCallStates] } : m))
-      );
-    }
-
-    return results;
-  };
+  // 原先这里直接调 electronAPI.toolsExecute() 绕过确认执行工具（D14/04 §2.1）。
+  // 现在工具由主进程在 ai:chat 内完成确认与执行，渲染端只负责展示结果。
+  const mapToolCallStates = (calls: any[], results: any[]): ToolCallState[] =>
+    (calls || []).map((tc: any) => {
+      const id = tc.id || `call_${Date.now()}`;
+      const result = (results || []).find((tr: any) => tr.toolCallId === id);
+      return {
+        id,
+        name: tc.function?.name || tc.name || '',
+        arguments:
+          typeof tc.function?.arguments === 'string'
+            ? JSON.parse(tc.function.arguments)
+            : tc.function?.arguments || tc.arguments || {},
+        status: (result?.isError ? 'error' : 'done') as ToolCallState['status'],
+        result: result?.result,
+      };
+    });
 
   // ---------- 发送消息（支持MCP工具调用） ----------
   const sendMessage = async (content: string) => {
@@ -455,114 +446,45 @@ function App() {
     setIsThinking(true);
 
     try {
-      // 构建请求体，注入工具定义
-      const requestBody: any = {
-        model: config.modelName,
-        messages: [
-          { role: 'system', content: config.systemPrompt || DEFAULT_CONFIG.systemPrompt },
-          ...messages.map((m) => ({ role: m.role, content: m.content })),
-          { role: 'user', content },
-        ],
-        stream: false,
-      };
-
-      // 如果有工具定义，注入到请求中
-      if (toolDefinitions.length > 0) {
-        requestBody.tools = toolDefinitions;
-      }
-
-      const response = await fetch(config.ollamaUrl + '/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
-      });
-
-      if (!response.ok) {
-        message.error('模型错误: ' + response.status);
-        setIsThinking(false);
-        return;
-      }
-
-      const data = await response.json();
-      let reply = data.message?.content || '抱歉，我无法理解您的问题。';
-
-      // 检查是否有工具调用
-      const toolCalls = data.message?.tool_calls || data.tool_calls;
       const aiMsgId = (Date.now() + 1).toString();
+      const reqMessages = [
+        { role: 'system', content: config.systemPrompt || DEFAULT_CONFIG.systemPrompt },
+        ...messages.map((m) => ({ role: m.role, content: m.content })),
+        { role: 'user', content },
+      ];
 
-      if (toolCalls && toolCalls.length > 0) {
-        log('[Admin] 检测到工具调用: ' + toolCalls.length + ' 个');
+      // 先插入空气泡，流式 chunk 逐字填充（T3.8）
+      const placeholder: DisplayMessage = {
+        id: aiMsgId,
+        role: 'assistant',
+        content: '',
+        timestamp: new Date().toISOString(),
+      };
+      setMessages([...newMsgs, placeholder]);
+      streamMsgIdRef.current = aiMsgId;
+      streamBufRef.current = '';
 
-        // 先显示AI的文本回复（可能为空）
-        const aiMsg: DisplayMessage = {
-          id: aiMsgId,
-          role: 'assistant',
-          content: reply || '正在调用工具...',
-          timestamp: new Date().toISOString(),
-          toolCalls: toolCalls.map((tc: any) => ({
-            id: tc.id || `call_${Date.now()}`,
-            name: tc.function?.name || tc.name || '',
-            arguments: typeof tc.function?.arguments === 'string'
-              ? JSON.parse(tc.function.arguments)
-              : tc.function?.arguments || tc.arguments || {},
-            status: 'pending' as const,
-          })),
-        };
-        const msgsWithAi = [...newMsgs, aiMsg];
-        setMessages(msgsWithAi);
+      // 统一交给主进程：AI 路由、提供商适配、工具注入与确认执行都在 main（T3.6/T3.7）
+      const response = await window.electronAPI?.aiStreamChat({
+        model: config.modelName,
+        messages: reqMessages,
+        stream: true,
+      });
+      streamMsgIdRef.current = null;
 
-        // 执行工具调用
-        const toolResults = await handleToolCalls(toolCalls, aiMsgId);
+      const reply =
+        response?.content || streamBufRef.current || '抱歉，我无法理解您的问题。';
+      const toolCallStates = mapToolCallStates(response?.toolCalls || [], response?.toolResults || []);
 
-        // 将工具结果发送回AI继续对话
-        const toolResultMessages = toolCalls.map((tc: any, idx: number) => ({
-          role: 'tool',
-          content: toolResults[idx] || '',
-          name: tc.function?.name || tc.name || '',
-        }));
-
-        const followUpResponse = await fetch(config.ollamaUrl + '/api/chat', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            model: config.modelName,
-            messages: [
-              { role: 'system', content: config.systemPrompt || DEFAULT_CONFIG.systemPrompt },
-              ...messages.map((m) => ({ role: m.role, content: m.content })),
-              { role: 'user', content },
-              { role: 'assistant', content: reply },
-              ...toolResultMessages,
-            ],
-            stream: false,
-            ...(toolDefinitions.length > 0 ? { tools: toolDefinitions } : {}),
-          }),
-        });
-
-        if (followUpResponse.ok) {
-          const followUpData = await followUpResponse.json();
-          const followUpReply = followUpData.message?.content || '工具调用完成。';
-
-          // 更新AI消息内容
-          const finalMsgs = msgsWithAi.map((m) =>
-            m.id === aiMsgId ? { ...m, content: followUpReply } : m
-          );
-          setMessages(finalMsgs);
-          persistHistory(finalMsgs.map(({ toolCalls, ...rest }) => rest as ChatMessage));
-          speakText(followUpReply);
-        }
-      } else {
-        // 没有工具调用，直接显示回复
-        const aiMsg: DisplayMessage = {
-          id: aiMsgId,
-          role: 'assistant',
-          content: reply,
-          timestamp: new Date().toISOString(),
-        };
-        const finalMsgs = [...newMsgs, aiMsg];
-        setMessages(finalMsgs);
-        persistHistory(finalMsgs.map(({ toolCalls, ...rest }) => rest as ChatMessage));
-        speakText(reply);
-      }
+      const aiMsg: DisplayMessage = {
+        ...placeholder,
+        content: reply,
+        ...(toolCallStates.length ? { toolCalls: toolCallStates } : {}),
+      };
+      const finalMsgs = [...newMsgs, aiMsg];
+      setMessages(finalMsgs);
+      persistHistory(finalMsgs.map(({ toolCalls: _tc, ...rest }) => rest as ChatMessage));
+      speakText(reply);
     } catch (e: any) {
       message.error('请求失败: ' + e.message);
     } finally {
@@ -576,14 +498,10 @@ function App() {
     isSpeakingRef.current = true;
 
     try {
-      const ttsResponse = await fetch(config.ttsUrl + '/speak', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, speed: config.voiceSpeed }),
-      });
-      const ttsData = await ttsResponse.json();
-      if (ttsData.audio) {
-        const audio = new Audio('data:audio/mp3;base64,' + ttsData.audio);
+      // 走主进程代理的本地 TTS（T2.5）：渲染端不再直连 8086，也不接触 token
+      const ttsData = await window.electronAPI?.voiceSpeak(text);
+      if (ttsData?.success && ttsData.audio) {
+        const audio = new Audio(`data:audio/${ttsData.format || 'mp3'};base64,${ttsData.audio}`);
         currentAudioRef.current = audio;
 
         audio.onended = () => {
@@ -615,14 +533,26 @@ function App() {
   };
 
   // ---------- 工具确认对话框 ----------
+  const resetConfirmModal = () =>
+    setConfirmModal({
+      visible: false,
+      id: '',
+      name: '',
+      arguments: {},
+      description: '',
+      riskLevel: 2,
+      allowAlways: false,
+    });
+
   const handleToolConfirm = (alwaysAllow: boolean) => {
-    window.electronAPI?.toolsConfirm(confirmModal.id, alwaysAllow);
-    setConfirmModal({ visible: false, id: '', name: '', arguments: {} });
+    // approved 与 alwaysAllow 是两个独立字段（04 §3.4）
+    window.electronAPI?.toolsConfirm(confirmModal.id, true, alwaysAllow && confirmModal.allowAlways);
+    resetConfirmModal();
   };
 
   const handleToolCancel = () => {
     window.electronAPI?.toolsCancel(confirmModal.id);
-    setConfirmModal({ visible: false, id: '', name: '', arguments: {} });
+    resetConfirmModal();
   };
 
   // ---------- 文件拖入处理 ----------
@@ -679,7 +609,7 @@ function App() {
   // ---------- Pin 卡片 ----------
   const handlePin = async (msg: DisplayMessage) => {
     try {
-      await window.electronAPI?.pinCreate(msg.content, msg.id);
+      await window.electronAPI?.pinCreate(msg.content);
       message.success('已钉到桌面');
     } catch (e: any) {
       message.error('Pin失败: ' + e.message);
@@ -1013,13 +943,18 @@ function App() {
             <Button key="allow" type="primary" onClick={() => handleToolConfirm(false)}>
               允许
             </Button>,
-            <Button key="always" type="primary" danger onClick={() => handleToolConfirm(true)}>
-              始终允许
-            </Button>,
+            confirmModal.allowAlways ? (
+              <Button key="always" type="primary" danger onClick={() => handleToolConfirm(true)}>
+                始终允许
+              </Button>
+            ) : null,
           ]}
         >
           <div style={{ marginBottom: 12 }}>
             <strong>工具名称:</strong> {confirmModal.name}
+            {confirmModal.description && (
+              <div style={{ marginTop: 8, whiteSpace: 'pre-wrap' }}>{confirmModal.description}</div>
+            )}
           </div>
           <div>
             <strong>参数:</strong>

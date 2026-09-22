@@ -1,9 +1,8 @@
 import * as https from 'https';
 import * as http from 'http';
-import { exec, execSync } from 'child_process';
-import { clipboard, Notification, nativeImage } from 'electron';
-import * as fs from 'fs';
-import * as path from 'path';
+import { exec, execFile } from 'child_process';
+import { clipboard, Notification } from 'electron';
+import { guardAppName, guardCommand } from './security';
 
 // ---------- 类型定义 ----------
 export interface MCPTool {
@@ -45,6 +44,44 @@ function httpGet(url: string, timeout = 10000): Promise<string> {
   });
 }
 
+/**
+ * URL 参数校验（doc/优化方案 04 §2.2）：
+ * 缺参数要快速失败而不是带着 undefined 去发请求；同时挡掉内网/元数据地址，
+ * 避免 AI 用 read_url 探测 127.0.0.1 服务或 169.254.169.254。
+ */
+export function validateFetchUrl(raw: unknown): { ok: boolean; url?: string; reason?: string } {
+  const input = typeof raw === 'string' ? raw.trim() : '';
+  if (!input) return { ok: false, reason: '缺少 url 参数' };
+  let u: URL;
+  try {
+    u = new URL(input);
+  } catch {
+    return { ok: false, reason: 'url 格式非法' };
+  }
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+    return { ok: false, reason: '只允许 http/https' };
+  }
+  // URL 会把 IPv6 的方括号去掉：http://[::1]:8084 → hostname "::1"
+  const host = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  const blocked =
+    host === '::1' ||
+    host === '0:0:0:0:0:0:0:1' ||
+    /^f[cd][0-9a-f]{2}:/i.test(host) || // 站点本地 IPv6
+    /^fe80:/i.test(host) ||             // 链路本地 IPv6
+    host === 'localhost' ||
+    host === 'metadata.google.internal' ||
+    host.endsWith('.internal') ||
+    host.endsWith('.local') ||
+    /^127\./.test(host) ||
+    /^0\.0\.0\.0$/.test(host) ||
+    /^10\./.test(host) ||
+    /^192\.168\./.test(host) ||
+    /^172\.(1[6-9]|2\\d|3[01])\./.test(host) ||
+    /^169\.254\./.test(host);
+  if (blocked) return { ok: false, reason: '禁止访问内网/环回地址' };
+  return { ok: true, url: u.toString() };
+}
+
 /** 去除 HTML 标签，提取纯文本 */
 function stripHtml(html: string): string {
   return html
@@ -74,6 +111,20 @@ function execWithTimeout(command: string, timeout = 10000): Promise<string> {
   });
 }
 
+/** 不经过 shell 的执行路径，参数中的元字符不会被二次解析 */
+function execFileWithTimeout(
+  bin: string,
+  args: string[],
+  timeout = 10000
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(bin, args, { timeout, windowsHide: true }, (error, stdout, stderr) => {
+      if (error) reject(new Error(stderr || error.message));
+      else resolve(stdout.trim());
+    });
+  });
+}
+
 // ---------- 工具列表 ----------
 
 const webSearchTool: MCPTool = {
@@ -91,7 +142,9 @@ const webSearchTool: MCPTool = {
   },
   requiresConfirmation: false,
   execute: async (params) => {
-    const query = encodeURIComponent(params.query);
+    const q = typeof params?.query === 'string' ? params.query.trim() : '';
+    if (!q) return '缺少 query 参数，无法搜索。';
+    const query = encodeURIComponent(q);
     const url = `https://api.duckduckgo.com/?q=${query}&format=json&no_html=1`;
     try {
       const data = await httpGet(url, 10000);
@@ -132,8 +185,10 @@ const readUrlTool: MCPTool = {
   },
   requiresConfirmation: false,
   execute: async (params) => {
+    const check = validateFetchUrl(params?.url);
+    if (!check.ok) return `读取URL失败: ${check.reason}`;
     try {
-      const html = await httpGet(params.url, 15000);
+      const html = await httpGet(check.url!, 15000);
       const text = stripHtml(html);
       return text || '无法提取页面文本内容。';
     } catch (e: any) {
@@ -246,15 +301,19 @@ const openAppTool: MCPTool = {
   requiresConfirmation: true,
   execute: async (params) => {
     const { appName } = params;
+    // 不再拼接 shell 字符串，改走 execFile（修复 D04 命令注入）
+    const guard = guardAppName(String(appName ?? ''));
+    if (!guard.allowed) return `打开应用失败: ${guard.reason}`;
+    const name = guard.resolved!;
     try {
       if (process.platform === 'darwin') {
-        await execWithTimeout(`open -a "${appName}"`, 10000);
+        await execFileWithTimeout('open', ['-a', name], 10000);
       } else if (process.platform === 'win32') {
-        await execWithTimeout(`start "" "${appName}"`, 10000);
+        await execFileWithTimeout('cmd', ['/d', '/s', '/c', 'start', '""', name], 10000);
       } else {
-        await execWithTimeout(`xdg-open "${appName}"`, 10000);
+        await execFileWithTimeout('xdg-open', [name], 10000);
       }
-      return `已打开应用: ${appName}`;
+      return `已打开应用: ${name}`;
     } catch (e: any) {
       return `打开应用失败: ${e.message}`;
     }
@@ -277,6 +336,9 @@ const executeCommandTool: MCPTool = {
   requiresConfirmation: true,
   execute: async (params) => {
     const { command } = params;
+    // 二次防线：即便调用方漏了检查，高危命令也不会落到 shell
+    const guard = guardCommand(String(command ?? ''));
+    if (!guard.allowed) return `操作被安全策略拒绝: ${guard.reason}`;
     try {
       const result = await execWithTimeout(command, 10000);
       return result || '(命令执行成功，无输出)';

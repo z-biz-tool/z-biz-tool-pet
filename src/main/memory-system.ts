@@ -35,17 +35,21 @@ interface LongTermMemory {
 }
 
 let longTermMemory: LongTermMemory[] = [];
+// initMemory 传入的目录，供 saveLongTermMemory 使用（修复 D11：此前 dataDir 未定义导致持久化必失败）
+let memoryDataDir: string | null = null;
 
 // 记忆类型
 export type MemoryType = 'short' | 'long';
 
 // 初始化
 export function initMemory(dataDir: string): void {
+  memoryDataDir = dataDir;
   const memoryFile = path.join(dataDir, 'long_term_memory.json');
   try {
     if (fs.existsSync(memoryFile)) {
       const raw = fs.readFileSync(memoryFile, 'utf-8');
-      longTermMemory = JSON.parse(raw);
+      const parsed = JSON.parse(raw);
+      longTermMemory = Array.isArray(parsed) ? parsed : [];
     }
   } catch (e: any) {
     console.error('[Memory] 加载长期记忆失败:', e.message);
@@ -55,9 +59,15 @@ export function initMemory(dataDir: string): void {
 
 // 保存长期记忆
 function saveLongTermMemory(): void {
+  if (!memoryDataDir) {
+    console.error('[Memory] 未初始化，跳过保存');
+    return;
+  }
   try {
-    const memoryFile = path.join(dataDir, 'long_term_memory.json');
-    fs.writeFileSync(memoryFile, JSON.stringify(longTermMemory, null, 2), 'utf-8');
+    const memoryFile = path.join(memoryDataDir, 'long_term_memory.json');
+    const tmp = `${memoryFile}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(longTermMemory, null, 2), 'utf-8');
+    fs.renameSync(tmp, memoryFile); // 原子替换，避免中断留下半截 JSON
   } catch (e: any) {
     console.error('[Memory] 保存长期记忆失败:', e.message);
   }
@@ -108,9 +118,9 @@ export function addLongTermMemory(key: string, content: string, confidence: numb
 }
 
 // 获取长期记忆
-export function getLongTermMemory(key?: string): LongTermMemory | LongTermMemory[] {
+export function getLongTermMemory(key?: string): LongTermMemory | LongTermMemory[] | null {
   if (key) {
-    return longTermMemory.find(m => m.key === key);
+    return longTermMemory.find(m => m.key === key) ?? null;
   }
   return longTermMemory;
 }

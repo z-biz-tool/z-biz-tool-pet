@@ -39,3 +39,12 @@ electron.log
 
 # OS temp
 .tmp/
+
+# 语音临时文件（不得入库）
+server/temp_*
+server/*.webm
+server/*.wav
+server/*.mp3
+server/*.aiff
+whisper.cpp/*
+!whisper.cpp/README.md

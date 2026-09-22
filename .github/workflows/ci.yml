@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      # ELECTRON_SKIP_BINARY_DOWNLOAD：CI 上不启动 GUI，无需下载 ~110MB 运行时
+      - name: Install dependencies
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+        run: npm ci
+
+      - name: Typecheck (main + preload + renderer)
+        run: npm run typecheck
+
+      # 只把 error 作为硬门禁，react-hooks/exhaustive-deps 等 warning 暂不阻断
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build bundle
+        run: npm run build
+
+      - name: Verify build artifacts
+        shell: bash
+        run: |
+          test -f dist/main/index.js
+          test -f dist/preload/index.js
+          test -f dist/renderer/pet/index.html
+          test -f dist/renderer/admin/index.html

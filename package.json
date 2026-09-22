@@ -6,10 +6,15 @@
   "scripts": {
     "dev": "concurrently -k \"npm run dev:vite\" \"npm run dev:electron\"",
     "dev:vite": "vite",
-    "dev:electron": "wait-on http://localhost:5173 && tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json && electron .",
+    "dev:electron": "wait-on http://127.0.0.1:5173/pet/index.html && tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json && electron .",
     "build": "tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json && vite build",
-    "build:win": "npm run build && electron-builder --win",
-    "build:mac": "npm run build && electron-builder --mac"
+    "build:win": "npm run stage:server && npm run build && electron-builder --win",
+    "build:mac": "npm run stage:server && npm run build && electron-builder --mac",
+    "stage:server": "node scripts/stage-server-deps.cjs",
+    "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.preload.json --noEmit && tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "keywords": [
     "electron",
@@ -19,7 +24,69 @@
   ],
   "author": "",
   "license": "ISC",
+  "build": {
+    "appId": "com.zbiztool.zbot",
+    "productName": "Z-Bot",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "server",
+        "to": "server",
+        "filter": [
+          "*.js"
+        ]
+      },
+      {
+        "from": "build/server-deps/node_modules",
+        "to": "server/node_modules"
+      }
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "category": "public.app-category.utilities",
+      "identity": null
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "Utility"
+    }
+  },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^25.6.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
@@ -27,8 +94,12 @@
     "concurrently": "^9.2.1",
     "electron": "^41.2.1",
     "electron-builder": "^26.8.1",
+    "eslint": "^10.11.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "typescript": "^6.0.3",
+    "typescript-eslint": "^8.70.1",
     "vite": "^8.0.8",
+    "vitest": "^5.0.1",
     "wait-on": "^9.0.5"
   },
   "dependencies": {
@@ -36,11 +107,12 @@
     "antd": "^6.5.3",
     "cors": "^2.8.6",
     "cron-parser": "^4.9.0",
+    "electron-updater": "^6.8.9",
     "express": "^5.2.1",
     "multer": "^2.1.1",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
-    "zustand": "^5.0.12",
-    "z-biz-tool-shared": "^0.1.0"
+    "z-biz-tool-shared": "^0.1.0",
+    "zustand": "^5.0.12"
   }
 }

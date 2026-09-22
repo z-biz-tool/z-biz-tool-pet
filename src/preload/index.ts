@@ -79,7 +79,7 @@ export interface ChatResponse {
   toolResults?: any[];
 }
 
-contextBridge.exposeInMainWorld('electronAPI', {
+const api = {
   // 窗口控制
   toggleWindow: (mode: 'admin' | 'pet') => ipcRenderer.invoke('window:toggle', mode),
   getMode: () => ipcRenderer.invoke('app:getMode'),
@@ -124,7 +124,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   clearConversation: () => ipcRenderer.invoke('history:clear'),
 
   // ---------- 动画系统 IPC ----------
-  getCursorPosition: () => ipcRenderer.invoke('pet:getCursorPosition'),
+  // 鼠标位置改为主进程推送（T3.2）；不再提供轮询式 getCursorPosition
+  onCursorDelta: (callback: (delta: { dx: number; dy: number }) => void) => {
+    const listener = (_: unknown, delta: { dx: number; dy: number }) => callback(delta);
+    ipcRenderer.on('pet:cursorDelta', listener);
+    return () => ipcRenderer.removeListener('pet:cursorDelta', listener);
+  },
   triggerAnimation: (animType: string) => ipcRenderer.invoke('pet:triggerAnimation', animType),
   setPetPositionWithBounds: (x: number, y: number) => ipcRenderer.invoke('pet:setPosition', x, y),
   onTriggerAnimation: (callback: (animType: string) => void) => {
@@ -176,12 +181,56 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   // ---------- MCP工具 IPC ----------
+  // toolsExecute 已移除（04 §2.1）：渲染进程不能再绕过确认直接执行工具
   toolsList: () => ipcRenderer.invoke('tools:list'),
-  toolsExecute: (name: string, params: any) => ipcRenderer.invoke('tools:execute', name, params),
-  toolsConfirm: (toolCallId: string, confirmed: boolean) => ipcRenderer.invoke('tools:confirm', toolCallId, confirmed),
-  onToolsConfirmRequest: (callback: (data: { toolCallId: string; name: string; arguments: any }) => void) => {
-    ipcRenderer.on('tools:confirmRequest', (_, data) => callback(data));
-    return () => ipcRenderer.removeListener('tools:confirmRequest', callback as any);
+  toolsConfirm: (toolCallId: string, approved: boolean, alwaysAllow?: boolean) =>
+    ipcRenderer.invoke('tools:confirm', toolCallId, approved, alwaysAllow),
+  toolsCancel: (toolCallId: string) => ipcRenderer.invoke('tools:cancel', toolCallId),
+  toolsAlwaysAllowed: () => ipcRenderer.invoke('tools:alwaysAllowed'),
+  toolsRevokeAlwaysAllowed: (name: string) => ipcRenderer.invoke('tools:revokeAlwaysAllowed', name),
+  onToolsConfirmRequest: (
+    callback: (data: {
+      toolCallId: string;
+      name: string;
+      arguments: any;
+      riskLevel: number;
+      description: string;
+      timeout: number;
+      allowAlways: boolean;
+    }) => void
+  ) => {
+    const listener = (_: unknown, data: any) => callback(data);
+    ipcRenderer.on('tools:confirmRequest', listener);
+    return () => ipcRenderer.removeListener('tools:confirmRequest', listener);
+  },
+
+  // ---------- 语音服务 IPC（T2.5/T2.6/T2.8） ----------
+  // 渲染进程不再直连 8084/8086，统一由主进程带 token 代理
+  voiceTranscribe: (base64Audio: string) => ipcRenderer.invoke('voice:transcribe', base64Audio),
+  voiceSpeak: (text: string, voice?: string) => ipcRenderer.invoke('voice:speak', text, voice),
+  voiceStatus: () => ipcRenderer.invoke('voice:status'),
+  checkMicrophone: () => ipcRenderer.invoke('voice:checkMicrophone'),
+
+  // ---------- 快捷键与 STT 模型（T4.9） ----------
+  shortcutsList: () => ipcRenderer.invoke('shortcuts:list'),
+  shortcutsUpdate: (overrides: Record<string, string>) => ipcRenderer.invoke('shortcuts:update', overrides),
+  sttModels: () => ipcRenderer.invoke('stt:models'),
+
+  // ---------- 自动更新 IPC（T5.6） ----------
+  updateCheck: () => ipcRenderer.invoke('update:check'),
+  updateStatus: () => ipcRenderer.invoke('update:status'),
+  updateInstall: () => ipcRenderer.invoke('update:install'),
+  onUpdateStatus: (callback: (payload: any) => void) => {
+    const listener = (_: unknown, payload: any) => callback(payload);
+    ipcRenderer.on('update:status', listener);
+    return () => ipcRenderer.removeListener('update:status', listener);
+  },
+
+  // ---------- 任务动作 IPC（T1.12） ----------
+  onTaskAction: (callback: (payload: { type: string; content: string; taskName?: string }) => void) => {
+    const listener = (_: unknown, payload: any) => callback(payload);
+    ipcRenderer.on('task:action', listener);
+    return () => ipcRenderer.removeListener('task:action', listener);
   },
 
   // ---------- 语音打断 IPC ----------
@@ -248,4 +297,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // 日志
   log: (msg: string) => ipcRenderer.send('log', msg),
-});
+};
+
+/**
+ * 渲染层类型直接派生自这里真实暴露的对象（T1.10，修复 D25 类型与运行时不一致）：
+ * preload 少暴露一个方法，renderer 侧就会编译报错，而不是运行时拿到 undefined。
+ */
+export type ElectronApi = typeof api;
+
+contextBridge.exposeInMainWorld('electronAPI', api);

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Row, Col, Button, Typography, ColorPicker, Slider, Space, Tag, Modal, Form, Input, message } from 'antd';
-import { SunOutlined, MoonOutlined, CloudRainOutlined, CloudOutlined, HeartOutlined, StarOutlined, MusicOutlined } from '@ant-design/icons';
+import { Card, Row, Col, Button, Typography, ColorPicker, Space, Modal, Form, Input, message } from 'antd';
+import { SunOutlined, MoonOutlined, ThunderboltOutlined, CloudOutlined } from '@ant-design/icons';
 
 const { Title, Text } = Typography;
 
@@ -42,7 +42,7 @@ const PARTICLE_TYPES: ParticleConfig[] = [
   { id: 'float', type: 'float', content: '☁️', enabled: true },
 ];
 
-const SceneryPanel: React.FC<SceneryPanelProps> = ({ open, onClose }) => {
+const SceneryPanel: React.FC<SceneryPanelProps> = ({ open }) => {
   const [currentScenery, setCurrentScenery] = useState<Scenery>(PRESET_SCENERIES[0]);
   const [customScenery, setCustomScenery] = useState<Scenery>({
     id: 'custom',
@@ -79,7 +79,7 @@ const SceneryPanel: React.FC<SceneryPanelProps> = ({ open, onClose }) => {
   const handleCustomSave = () => {
     try {
       const values = form.getFieldsValue();
-      const custom = {
+      const custom: Scenery = {
         id: 'custom',
         name: values.name || '自定义',
         description: values.description || '自定义场景',
@@ -122,7 +122,7 @@ const SceneryPanel: React.FC<SceneryPanelProps> = ({ open, onClose }) => {
                   <span style={{ fontSize: 24 }}>
                     {scenery.type === 'day' && <SunOutlined />}
                     {scenery.type === 'night' && <MoonOutlined />}
-                    {scenery.type === 'rain' && <CloudRainOutlined />}
+                    {scenery.type === 'rain' && <ThunderboltOutlined />}
                     {scenery.type === 'sunset' && <CloudOutlined />}
                   </span>
                   <Text strong>{scenery.name}</Text>

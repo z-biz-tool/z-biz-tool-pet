@@ -75,6 +75,9 @@ export interface QuickCommandManager {
 let commands: QuickCommand[] = [];
 
 export const QuickCommandManager: QuickCommandManager = {
+  get commands() {
+    return commands;
+  },
   load: () => {
     return commands;
   },

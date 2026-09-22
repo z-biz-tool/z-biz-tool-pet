@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
   AnimationType,
   ANIMATION_KEYFRAMES,
@@ -16,6 +16,14 @@ import {
   getSkinById,
   getSkinCSSVariables,
 } from '../shared/skins';
+import {
+  Emotion,
+  PetStats as PetCoreStats,
+  EMOTION_CONFIGS,
+  resolveEmotion,
+  buildEmotionPromptSuffix,
+} from '../shared/emotions';
+import './pet.css';
 
 const log = (msg: string) => {
   console.log(msg);
@@ -41,6 +49,39 @@ const DEFAULT_PROMPT = '你是一只可爱的桌面萌宠小猫咪，名字叫Z-
 // 语音打断阈值（可配置，默认30）
 const INTERRUPT_THRESHOLD = 30;
 
+// 生命周期阶段对应的体型（此前 JSX 直接引用未定义的 STAGE_SIZES）
+const STAGE_SIZES: Record<PetCoreStats['stage'], number> = {
+  egg: 90,
+  baby: 110,
+  child: 125,
+  adult: 140,
+};
+
+// HUD 六维属性条
+const STAT_BARS: { key: keyof PetCoreStats; label: string; icon: string; color: string }[] = [
+  { key: 'hunger', label: '饱食', icon: '🍖', color: '#faad14' },
+  { key: 'happiness', label: '心情', icon: '😊', color: '#eb2f96' },
+  { key: 'energy', label: '精力', icon: '⚡', color: '#1890ff' },
+  { key: 'cleanliness', label: '清洁', icon: '🛁', color: '#13c2c2' },
+  { key: 'health', label: '健康', icon: '❤️', color: '#ff4d4f' },
+  { key: 'affection', label: '好感', icon: '💕', color: '#722ed1' },
+];
+
+const DEFAULT_STATS: PetCoreStats = {
+  hunger: 80,
+  happiness: 80,
+  energy: 80,
+  cleanliness: 80,
+  health: 100,
+  affection: 50,
+  age: 0,
+  stage: 'egg',
+  bornAt: new Date().toISOString(),
+  lastUpdate: new Date().toISOString(),
+  isSleeping: false,
+  isSick: false,
+};
+
 function App() {
   const [status, setStatus] = useState<PetStatus>('idle');
   const [lastMessage, setLastMessage] = useState('');
@@ -53,6 +94,8 @@ function App() {
     systemPrompt: DEFAULT_PROMPT,
     petName: 'Z-Bot 小猫咪',
     voiceSpeed: 1.0,
+    particleEnabled: true,
+    interruptThreshold: 30,
   });
 
   // 动画状态
@@ -62,6 +105,46 @@ function App() {
   const [zzzVisible, setZzzVisible] = useState(false);
   const [eyeOffset, setEyeOffset] = useState({ x: 0, y: 0 });
   const [isBlinking, setIsBlinking] = useState(false);
+
+  // 养成 / 情绪 / 面板状态
+  const [petStats, setPetStats] = useState<PetCoreStats>(DEFAULT_STATS);
+  const [currentEmotion, setCurrentEmotion] = useState<Emotion>('happy');
+  const [showHUD, setShowHUD] = useState(false);
+  const [showActions, setShowActions] = useState(false);
+  const [micGuide, setMicGuide] = useState(false);
+  const cursorDeltaRef = useRef({ dx: 0, dy: 0 });
+  // 流式回复缓冲（T3.8）：main 只把 chunk 发给发起窗口，这里按 ref 判定归属
+  const streamActiveRef = useRef(false);
+  const streamBufRef = useRef('');
+  const petStatsRef = useRef<PetCoreStats>(DEFAULT_STATS);
+  petStatsRef.current = petStats;
+  const handlePetActionRef = useRef<((action: string) => void) | null>(null);
+
+  const refreshStats = useCallback(async () => {
+    const stats = await window.electronAPI?.petGetStats();
+    if (stats) setPetStats(stats as PetCoreStats);
+  }, []);
+
+  // 主进程动作投递（定时任务 speak/animation/... 修复 D12 后的接收端）
+  const handleTaskAction = useCallback(
+    (payload: { type: string; content: string; taskName?: string }) => {
+      switch (payload.type) {
+        case 'speak':
+          setLastMessage(payload.content);
+          setStatus('speaking');
+          break;
+        case 'animation':
+          triggerAnimation(payload.content as AnimationType, 'user');
+          break;
+        case 'petAction':
+          void handlePetActionRef.current?.(payload.content);
+          break;
+        default:
+          break;
+      }
+    },
+    []
+  );
 
   // 皮肤状态
   const [currentSkin, setCurrentSkin] = useState<PetSkin>(PRESET_SKINS[0]);
@@ -75,11 +158,30 @@ function App() {
     backgroundColor: 'linear-gradient(135deg, #87CEEB 0%, #E0F7FA 100%)',
     particleColor: '#FFD700',
   });
-  const [particleEffects, setParticleEffects] = useState<{id: string, type: 'heart' | 'star' | 'music' | 'sparkle' | 'bounce' | 'float', content: string}[]>([
+  const [particleEffects, setParticleEffects] = useState<{id: string, type: 'heart' | 'star' | 'music' | 'sparkle' | 'bounce' | 'float', content: string, enabled?: boolean}[]>([
     { id: 'heart', type: 'heart', content: '💕' },
     { id: 'star', type: 'star', content: '✨' },
     { id: 'music', type: 'music', content: '🎵' },
   ]);
+
+  // 粒子布局只计算一次：原先把 Math.random() 写在 render 的 inline style 里，
+  // 每次重渲染都会重排这些常驻 infinite 动画元素
+  const particleLayouts = useMemo(
+    () =>
+      particleEffects
+        .filter((p) => p.enabled !== false)
+        .map((p, i) => ({
+          id: p.id,
+          type: p.type,
+          content: p.content,
+          style: {
+            left: `${20 + ((i * 37) % 60)}%`,
+            animation: `particleFall ${3 + ((i * 13) % 4)}s linear infinite`,
+            animationDelay: `${((i * 29) % 20) / 10}s`,
+          } as React.CSSProperties,
+        })),
+    [particleEffects]
+  );
 
   // 右键菜单
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; show: boolean }>({ x: 0, y: 0, show: false });
@@ -127,7 +229,10 @@ function App() {
           systemPrompt: cfg.systemPrompt || DEFAULT_PROMPT,
           petName: cfg.petName || 'Z-Bot 小猫咪',
           voiceSpeed: cfg.voiceSpeed || 1.0,
+          interruptThreshold: cfg.interruptThreshold || 30,
+          particleEnabled: cfg.particleEnabled !== false,
         });
+        interruptThresholdRef.current = cfg.interruptThreshold || 30;
         // 加载皮肤
         if (cfg.currentSkinId) {
           const skin = getSkinById(cfg.currentSkinId);
@@ -146,12 +251,23 @@ function App() {
     startBlinkTimer();
     // 启动空闲动画调度
     startIdleScheduler();
-    // 启动鼠标追踪
-    startCursorTracking();
+    // 拉取养成状态并订阅主进程推送
+    refreshStats();
+    const statsTimer = setInterval(() => void refreshStats(), 30_000);
+    const unsubCursor = window.electronAPI?.onCursorDelta?.(applyCursorDelta);
+    const unsubTask = window.electronAPI?.onTaskAction?.((payload) => handleTaskAction(payload));
+    const unsubChunk = window.electronAPI?.onAiStreamChunk?.((chunk) => {
+      if (!streamActiveRef.current) return;
+      if (chunk?.content) {
+        streamBufRef.current += chunk.content;
+        setLastMessage(streamBufRef.current);
+      }
+      if (chunk?.done) streamActiveRef.current = false;
+    });
 
     // 监听动画触发IPC
-    const unsubAnim = window.electronAPI?.onTriggerAnimation?.((anim: AnimationType) => {
-      triggerAnimation(anim, 'user');
+    const unsubAnim = window.electronAPI?.onTriggerAnimation?.((anim: string) => {
+      triggerAnimation(anim as AnimationType, 'user');
     });
     // 监听皮肤应用IPC
     const unsubSkin = window.electronAPI?.onApplySkin?.((skin: PetSkin) => {
@@ -180,6 +296,10 @@ function App() {
       unsubStop?.();
       unsubAnim?.();
       unsubSkin?.();
+      unsubCursor?.();
+      unsubTask?.();
+      unsubChunk?.();
+      clearInterval(statsTimer);
       if (animationTimerRef.current) clearTimeout(animationTimerRef.current);
       if (blinkTimerRef.current) clearTimeout(blinkTimerRef.current);
       if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
@@ -247,29 +367,17 @@ function App() {
     }, getRandomBlinkInterval());
   }, []);
 
-  const startCursorTracking = useCallback(() => {
-    if (cursorTrackRef.current) clearInterval(cursorTrackRef.current);
-    cursorTrackRef.current = setInterval(async () => {
-      if (statusRef.current !== 'idle') return;
-      if (currentAnimRef.current !== 'idle' && currentAnimRef.current !== 'float') return;
-      try {
-        const pos = await window.electronAPI?.getCursorPosition();
-        if (pos) {
-          const petCenterX = 100;
-          const petCenterY = 160;
-          const dx = pos.x - petCenterX;
-          const dy = pos.y - petCenterY;
-          const maxOffset = 3;
-          const dist = Math.sqrt(dx * dx + dy * dy) || 1;
-          setEyeOffset({
-            x: Math.round((dx / dist) * maxOffset * 10) / 10,
-            y: Math.round((dy / dist) * maxOffset * 10) / 10,
-          });
-        }
-      } catch {
-        // ignore
-      }
-    }, 100);
+  // 鼠标追踪改为消费主进程推送（T3.2）：渲染端不再有 100ms 轮询定时器
+  const applyCursorDelta = useCallback((delta: { dx: number; dy: number }) => {
+    cursorDeltaRef.current = delta;
+    if (statusRef.current !== 'idle') return;
+    if (currentAnimRef.current !== 'idle' && currentAnimRef.current !== 'float') return;
+    const maxOffset = 3;
+    const dist = Math.sqrt(delta.dx * delta.dx + delta.dy * delta.dy) || 1;
+    setEyeOffset({
+      x: Math.round((delta.dx / dist) * maxOffset * 10) / 10,
+      y: Math.round((delta.dy / dist) * maxOffset * 10) / 10,
+    });
   }, []);
 
   // ---------- 皮肤系统 ----------
@@ -366,6 +474,15 @@ function App() {
     }
     if (statusRef.current !== 'idle' && statusRef.current !== 'interrupted') return;
 
+    // T2.9：录音前预检权限，被拒时给可操作的引导，而不是静默失败
+    const granted = await window.electronAPI?.checkMicrophone();
+    if (granted === false) {
+      log('[Pet] 麦克风未授权，显示引导');
+      setMicGuide(true);
+      setStatus('idle');
+      return;
+    }
+
     log('[Pet] 开始录音...');
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -390,6 +507,9 @@ function App() {
       log('[Pet] 录音中...');
     } catch (error: any) {
       log('[Pet] 录音错误: ' + error.message);
+      if (error?.name === 'NotAllowedError' || error?.name === 'PermissionDeniedError') {
+        setMicGuide(true);
+      }
       setStatus('idle');
     }
   };
@@ -428,17 +548,13 @@ function App() {
       const base64 = (reader.result as string).split(',')[1];
       log('[Pet] 发送音频到 STT...');
       try {
-        const response = await fetch(config.sttUrl + '/transcribe', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ audio: base64 }),
-        });
-        const data = await response.json();
+        // 经主进程代理，渲染端不再直连 8084（T2.6）
+        const data = await window.electronAPI?.voiceTranscribe(base64);
         log('[Pet] STT 响应: ' + JSON.stringify(data));
-        if (data.text) {
+        if (data?.success && data.text) {
           await handleVoiceInput(data.text);
         } else {
-          log('[Pet] 未识别到文本');
+          log('[Pet] 未识别到文本' + (data?.error ? ': ' + data.error : ''));
           setStatus('idle');
         }
       } catch (error: any) {
@@ -461,27 +577,26 @@ function App() {
       const emotionSuffix = buildEmotionPromptSuffix(currentEmotion);
       const systemPromptWithEmotion = config.systemPrompt + emotionSuffix;
 
-      log('[Pet] 调用 ollama...');
-      const response = await fetch(config.ollamaUrl + '/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: config.modelName,
-          messages: [
-            { role: 'system', content: systemPromptWithEmotion },
-            { role: 'user', content: text },
-          ],
-          stream: false,
-        }),
+      log('[Pet] 请求 AI 回复（流式）...');
+      // 流式：首字直接落到气泡，工具与确认仍在主进程 ai:streamChat 内完成（T3.7/T3.8）
+      streamBufRef.current = '';
+      streamActiveRef.current = true;
+      const response = await window.electronAPI?.aiStreamChat({
+        messages: [
+          { role: 'system', content: systemPromptWithEmotion },
+          { role: 'user', content: text },
+        ],
+        model: config.modelName,
+        stream: true,
       });
-      if (!response.ok) {
-        log('[Pet] ollama 错误: ' + response.status);
+      streamActiveRef.current = false;
+      if (!response) {
+        log('[Pet] AI 无响应');
         setStatus('idle');
         return;
       }
-      const data = await response.json();
-      const reply = data.message?.content || '抱歉，我无法理解您的问题。';
-      log('[Pet] ollama 响应: ' + reply.slice(0, 50));
+      const reply = response.content || streamBufRef.current || '抱歉，我无法理解您的问题。';
+      log('[Pet] AI 响应: ' + reply.slice(0, 50));
       setLastMessage(reply);
 
       // 根据AI回复更新情绪
@@ -501,14 +616,10 @@ function App() {
     isSpeakingRef.current = true;
 
     try {
-      const ttsResponse = await fetch(config.ttsUrl + '/speak', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text, speed: config.voiceSpeed }),
-      });
-      const ttsData = await ttsResponse.json();
-      if (ttsData.audio) {
-        const audio = new Audio('data:audio/mp3;base64,' + ttsData.audio);
+      // 主进程代理本地 TTS，音频不再经过任何远端服务（T2.5/T2.1）
+      const ttsData = await window.electronAPI?.voiceSpeak(text);
+      if (ttsData?.success && ttsData.audio) {
+        const audio = new Audio(`data:audio/${ttsData.format || 'mp3'};base64,${ttsData.audio}`);
         currentAudioRef.current = audio;
 
         audio.onended = () => {
@@ -553,13 +664,43 @@ function App() {
     }
   };
 
+  const spawnHearts = useCallback(() => {
+    setHearts([Date.now(), Date.now() + 100, Date.now() + 200]);
+    setTimeout(() => setHearts([]), 2000);
+  }, []);
+
   const handleDoubleClick = () => {
     if (status !== 'idle') return;
     triggerAnimation('petted', 'user');
-    const newHearts = [Date.now(), Date.now() + 100, Date.now() + 200];
-    setHearts(newHearts);
-    setTimeout(() => setHearts([]), 2000);
+    spawnHearts();
+    void handlePetAction('pet');
   };
+
+  // 宠物互动动作：调用养成 IPC 后刷新状态与情绪
+  const handlePetAction = useCallback(async (action: string) => {
+    const api = window.electronAPI;
+    if (!api) return;
+    const call: Record<string, () => Promise<any>> = {
+      feed: () => api.petFeed(),
+      play: () => api.petPlay(),
+      wash: () => api.petWash(),
+      sleep: () => api.petSleep(),
+      medicine: () => api.petMedicine(),
+      pet: () => api.petPet(),
+    };
+    const fn = call[action];
+    if (!fn) {
+      log('[Pet] 未知养成动作: ' + action);
+      return;
+    }
+    const stats = await fn();
+    if (stats) {
+      setPetStats(stats as PetCoreStats);
+      setCurrentEmotion(resolveEmotion(stats as PetCoreStats));
+    }
+    if (action === 'play' || action === 'pet') spawnHearts();
+  }, []);
+  handlePetActionRef.current = handlePetAction;
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -575,12 +716,10 @@ function App() {
 
   const handleAnimSelect = (anim: AnimationType) => {
     if (anim === 'chase') {
-      window.electronAPI?.getCursorPosition().then((pos) => {
-        if (pos) {
-          triggerAnimation('chase', 'user');
-          window.electronAPI?.setPetPosition(pos.x - 100, pos.y - 160);
-        }
-      });
+      // 位置取自主进程推送的最新鼠标偏移，不再同步拉取 IPC
+      const { dx, dy } = cursorDeltaRef.current;
+      triggerAnimation('chase', 'user');
+      window.electronAPI?.movePetWindow(dx, dy);
     } else {
       triggerAnimation(anim, 'user');
     }
@@ -699,22 +838,20 @@ function App() {
       onMouseEnter={() => setShowHUD(true)}
       onMouseLeave={() => { setShowHUD(false); setShowActions(false); }}
     >
-      {/* 场景粒子效果层 */}
-      <div className="particle-layer">
-        {particleEffects.filter(p => p.enabled !== false).map((particle, idx) => (
-          <div
-            key={`${particle.id}-${idx}`}
-            className={`particle ${particle.type}`}
-            style={{
-              left: `${20 + Math.random() * 60}%`,
-              animation: `particleFall ${3 + Math.random() * 3}s linear infinite`,
-              animationDelay: `${Math.random() * 2}s`,
-            }}
-          >
-            {particle.content}
-          </div>
-        ))}
-      </div>
+      {/* 场景粒子效果层：particleEnabled 关闭时完全不渲染，避免常驻 infinite 动画占用合成开销 */}
+      {config.particleEnabled && (
+        <div className="particle-layer">
+          {particleLayouts.map((layout, idx) => (
+            <div
+              key={`${layout.id}-${idx}`}
+              className={`particle ${layout.type}`}
+              style={layout.style}
+            >
+              {layout.content}
+            </div>
+          ))}
+        </div>
+      )}
       
       {/* CSS 绘制的圆形萌宠角色 */}
       <div
@@ -782,6 +919,51 @@ function App() {
       )}
 
       {/* 提示 */}
+      {micGuide && (
+        <div
+          className="mic-guide"
+          style={{
+            position: 'absolute',
+            left: 6,
+            right: 6,
+            bottom: 44,
+            padding: '8px 10px',
+            borderRadius: 10,
+            background: 'rgba(26, 26, 46, 0.94)',
+            color: '#fff',
+            fontSize: 11,
+            lineHeight: 1.5,
+            boxShadow: '0 4px 14px rgba(0,0,0,0.35)',
+            zIndex: 20,
+          }}
+        >
+          <div>需要麦克风权限才能语音对话 🎤</div>
+          <div style={{ fontSize: 10, opacity: 0.75 }}>
+            系统设置 → 隐私与安全性 → 麦克风 → 允许 Z-Bot
+          </div>
+          <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+            <button
+              style={{ flex: 1, fontSize: 11, padding: '2px 6px', borderRadius: 6, cursor: 'pointer' }}
+              onClick={async () => {
+                const ok = await window.electronAPI?.checkMicrophone();
+                if (ok !== false) {
+                  setMicGuide(false);
+                  startRecording();
+                }
+              }}
+            >
+              重试授权
+            </button>
+            <button
+              style={{ flex: 1, fontSize: 11, padding: '2px 6px', borderRadius: 6, cursor: 'pointer' }}
+              onClick={() => setMicGuide(false)}
+            >
+              知道了
+            </button>
+          </div>
+        </div>
+      )}
+
       {hint && <div className="hint">{hint}</div>}
       {!hint && status === 'idle' && <div className="hint">右键更多选项 | 双击摸摸我</div>}
 
@@ -793,6 +975,7 @@ function App() {
             return (
               <div key={key} className="hud-row">
                 <span className="hud-icon">{icon}</span>
+                <span className="hud-label">{label}</span>
                 <div className="hud-bar-bg">
                   <div className="hud-bar-fill" style={{ width: `${value}%`, background: color }} />
                 </div>
@@ -903,551 +1086,7 @@ function App() {
         </div>
       )}
 
-      <style>{`
-        ${ANIMATION_KEYFRAMES}
-
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        html, body, #root {
-          width: 100%; height: 100%;
-          background: transparent !important;
-          overflow: hidden;
-        }
-
-        /* 萌宠主体 */
-        .pet-body {
-          position: relative;
-          width: 120px;
-          height: 120px;
-          border-radius: 50%;
-          background: radial-gradient(circle at 35% 30%, var(--pet-body-light) 0%, var(--pet-body) 60%, var(--pet-body-dark) 100%);
-          box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3), inset -4px -8px 16px rgba(0,0,0,0.15);
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-          transition: background 0.5s ease;
-        }
-
-        /* 眼睛 */
-        .eyes {
-          display: flex;
-          gap: 20px;
-          margin-top: -5px;
-        }
-        .eye {
-          width: 18px;
-          height: 18px;
-          border-radius: 50%;
-          background: #fff;
-          position: relative;
-          transition: all 0.3s ease;
-          overflow: hidden;
-        }
-        .pupil {
-          position: absolute;
-          width: 8px;
-          height: 8px;
-          border-radius: 50%;
-          background: var(--pet-eye);
-          top: 5px;
-          left: 5px;
-          transition: transform 0.15s ease-out;
-        }
-        .eye-thinking {
-          height: 6px;
-          border-radius: 6px;
-          margin-top: 6px;
-        }
-        .eye-thinking .pupil { display: none; }
-        .eye-happy .pupil {
-          top: 2px;
-          left: 3px;
-          width: 12px;
-          height: 12px;
-        }
-        .eye-surprised {
-          width: 22px;
-          height: 22px;
-        }
-        .eye-surprised .pupil {
-          width: 10px;
-          height: 10px;
-          top: 6px;
-          left: 6px;
-        }
-        .eye-blink {
-          height: 2px;
-          border-radius: 2px;
-          margin-top: 8px;
-        }
-        .eye-blink .pupil { display: none; }
-        .eye-closed {
-          height: 2px;
-          border-radius: 2px;
-          margin-top: 8px;
-          background: var(--pet-eye);
-        }
-        .eye-closed .pupil { display: none; }
-        .eye-sleepy {
-          height: 8px;
-          border-radius: 8px;
-          margin-top: 5px;
-        }
-        .eye-sleepy .pupil {
-          top: 2px;
-          width: 6px;
-          height: 4px;
-        }
-
-        /* 嘴巴 */
-        .mouth {
-          margin-top: 10px;
-          transition: all 0.3s ease;
-        }
-        .mouth-smile {
-          width: 24px;
-          height: 12px;
-          border-bottom: 3px solid #fff;
-          border-radius: 0 0 24px 24px;
-        }
-        .mouth-o {
-          width: 12px;
-          height: 14px;
-          border-radius: 50%;
-          background: var(--pet-body-dark);
-          border: 2px solid #fff;
-        }
-        .mouth-flat {
-          width: 20px;
-          height: 3px;
-          border-radius: 3px;
-          background: #fff;
-        }
-        .mouth-speaking {
-          width: 16px;
-          height: 16px;
-          border-radius: 50%;
-          background: var(--pet-body-dark);
-          border: 2px solid #fff;
-          animation: mouthTalk 0.2s ease-in-out infinite alternate;
-        }
-        .mouth-yawn {
-          width: 20px;
-          height: 22px;
-          border-radius: 50%;
-          background: var(--pet-body-dark);
-          border: 2px solid #fff;
-          animation: mouthYawn 1.5s ease-in-out;
-        }
-        .mouth-sleep {
-          width: 16px;
-          height: 4px;
-          border-radius: 0 0 16px 16px;
-          border-bottom: 2px solid rgba(255,255,255,0.6);
-          border-left: 2px solid rgba(255,255,255,0.6);
-          border-right: 2px solid rgba(255,255,255,0.6);
-        }
-        @keyframes mouthTalk {
-          from { height: 6px; border-radius: 6px; }
-          to { height: 18px; border-radius: 50%; }
-        }
-        @keyframes mouthYawn {
-          0%, 100% { transform: scaleY(1); }
-          30% { transform: scaleY(1.3); }
-          60% { transform: scaleY(0.8); }
-        }
-
-        /* 腮红 */
-        .blush {
-          position: absolute;
-          width: 14px;
-          height: 8px;
-          border-radius: 50%;
-          background: var(--pet-blush);
-          top: 62px;
-          transition: background 0.5s ease;
-        }
-        .blush-left { left: 18px; }
-        .blush-right { right: 18px; }
-
-        /* thinking 旋转圈 */
-        .thinking-ring {
-          position: absolute;
-          top: -12px;
-          left: -12px;
-          width: 144px;
-          height: 144px;
-          border-radius: 50%;
-          border: 3px solid transparent;
-          border-top-color: var(--pet-accent);
-          border-right-color: var(--pet-body-light);
-          animation: spin 1s linear infinite;
-        }
-        @keyframes spin { to { transform: rotate(360deg); } }
-
-        /* recording 脉冲圈 */
-        .recording-ring {
-          position: absolute;
-          top: 0; left: 0;
-          width: 120px; height: 120px;
-          border-radius: 50%;
-          border: 3px solid #ff4d4f;
-          animation: pulseRing 1.2s ease-out infinite;
-        }
-        @keyframes pulseRing {
-          0% { transform: scale(1); opacity: 1; }
-          100% { transform: scale(1.6); opacity: 0; }
-        }
-
-        /* speaking 声波 */
-        .sound-waves {
-          position: absolute;
-          display: flex;
-          gap: 4px;
-          right: -28px;
-          top: 50%;
-          transform: translateY(-50%);
-        }
-        .sound-waves span {
-          display: block;
-          width: 4px;
-          background: var(--pet-accent);
-          border-radius: 2px;
-          animation: soundBar 0.5s ease-in-out infinite alternate;
-        }
-        .sound-waves span:nth-child(1) { height: 12px; animation-delay: 0s; }
-        .sound-waves span:nth-child(2) { height: 20px; animation-delay: 0.15s; }
-        .sound-waves span:nth-child(3) { height: 16px; animation-delay: 0.3s; }
-        @keyframes soundBar {
-          from { transform: scaleY(0.4); }
-          to { transform: scaleY(1); }
-        }
-
-        /* 可打断提示 */
-        .interrupt-hint {
-          position: absolute;
-          bottom: -22px;
-          left: 50%;
-          transform: translateX(-50%);
-          font-size: 9px;
-          color: var(--pet-body-light);
-          background: rgba(114, 46, 209, 0.3);
-          padding: 1px 6px;
-          border-radius: 6px;
-          white-space: nowrap;
-          animation: hintPulse 1.5s ease-in-out infinite;
-        }
-        @keyframes hintPulse {
-          0%, 100% { opacity: 0.6; }
-          50% { opacity: 1; }
-        }
-
-        /* 打断闪烁效果 */
-        .interrupt-flash {
-          position: absolute;
-          top: 0; left: 0;
-          width: 120px; height: 120px;
-          border-radius: 50%;
-          background: rgba(255, 255, 255, 0.4);
-          animation: flashOnce 0.3s ease-out;
-        }
-        @keyframes flashOnce {
-          from { opacity: 1; transform: scale(1); }
-          to { opacity: 0; transform: scale(1.3); }
-        }
-
-        /* 爱心粒子 */
-        .heart-particle {
-          position: absolute;
-          top: -10px;
-          font-size: 16px;
-          animation: animHeartFloat 1.5s ease-out forwards;
-          pointer-events: none;
-        }
-
-        /* 场景粒子 */
-        .particle-layer {
-          position: absolute;
-          top: 0;
-          left: 0;
-          width: 100%;
-          height: 100%;
-          pointer-events: none;
-          overflow: hidden;
-          z-index: 0;
-        }
-        .particle {
-          position: absolute;
-          top: -20px;
-          font-size: 14px;
-          animation: particleFall 4s linear infinite;
-          pointer-events: none;
-          opacity: 0.8;
-        }
-        @keyframes particleFall {
-          0% { top: -20px; opacity: 0; transform: translateX(0); }
-          50% { opacity: 0.8; }
-          100% { top: 110%; opacity: 0; transform: translateX(20px); }
-        }
-
-        /* Zzz气泡 */
-        .zzz-container {
-          position: absolute;
-          top: -5px;
-          right: -10px;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-        }
-        .zzz {
-          color: var(--pet-body-light);
-          font-weight: bold;
-          font-size: 16px;
-          animation: animZzz 2s ease-out infinite;
-          opacity: 0;
-        }
-
-        /* 文字 */
-        .status-text {
-          margin-top: 18px;
-          padding: 4px 14px;
-          background: rgba(255,255,255,0.95);
-          border-radius: 14px;
-          font-size: 12px;
-          color: #333;
-          font-weight: 500;
-          box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-          white-space: nowrap;
-        }
-        .last-message {
-          margin-top: 8px;
-          padding: 6px 10px;
-          background: rgba(0,0,0,0.65);
-          border-radius: 10px;
-          font-size: 11px;
-          color: #fff;
-          max-width: 180px;
-          text-align: center;
-          line-height: 1.4;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-        .hint {
-          margin-top: 6px;
-          font-size: 10px;
-          color: rgba(255,255,255,0.7);
-          text-shadow: 0 1px 2px rgba(0,0,0,0.5);
-        }
-        .admin-btn {
-          margin-top: 10px;
-          padding: 5px 14px;
-          background: rgba(255,255,255,0.85);
-          border: none;
-          border-radius: 12px;
-          color: var(--pet-body);
-          font-size: 12px;
-          font-weight: 600;
-          cursor: pointer;
-          transition: background 0.2s, color 0.5s;
-        }
-        .admin-btn:hover { background: #fff; }
-
-        /* 右键菜单 */
-        .context-menu {
-          position: fixed;
-          background: rgba(30, 30, 50, 0.95);
-          backdrop-filter: blur(10px);
-          border-radius: 10px;
-          padding: 6px 0;
-          min-width: 160px;
-          box-shadow: 0 8px 32px rgba(0,0,0,0.4);
-          z-index: 9999;
-          font-size: 13px;
-          color: #eee;
-        }
-        .menu-item {
-          padding: 8px 16px;
-          cursor: pointer;
-          position: relative;
-          white-space: nowrap;
-        }
-        .menu-item:hover {
-          background: rgba(255,255,255,0.1);
-        }
-        .menu-item.has-submenu::after {
-          content: '▸';
-          position: absolute;
-          right: 10px;
-          top: 50%;
-          transform: translateY(-50%);
-          font-size: 11px;
-        }
-        .menu-separator {
-          height: 1px;
-          background: rgba(255,255,255,0.1);
-          margin: 4px 8px;
-        }
-        .submenu {
-          position: absolute;
-          left: 100%;
-          top: 0;
-          background: rgba(30, 30, 50, 0.95);
-          backdrop-filter: blur(10px);
-          border-radius: 10px;
-          padding: 6px 0;
-          min-width: 140px;
-          box-shadow: 0 8px 32px rgba(0,0,0,0.4);
-        }
-        .submenu-item {
-          padding: 7px 14px;
-          cursor: pointer;
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          white-space: nowrap;
-        }
-        .submenu-item:hover {
-          background: rgba(255,255,255,0.1);
-        }
-        .submenu-item.active {
-          color: var(--pet-body-light);
-          font-weight: 600;
-        }
-        .skin-dot {
-          display: inline-block;
-          width: 12px;
-          height: 12px;
-          border-radius: 50%;
-          border: 1px solid rgba(255,255,255,0.3);
-          flex-shrink: 0;
-        }
-
-        /* ---- 19种情绪表情CSS ---- */
-        .emotion-happy .blush { opacity: 1 !important; }
-        .emotion-sad { filter: saturate(0.6) brightness(0.9); }
-        .emotion-angry { filter: saturate(1.3) brightness(0.85); }
-        .emotion-tsundere .blush { opacity: 0.9 !important; background: rgba(255, 80, 80, 0.6) !important; }
-        .emotion-cute .blush { opacity: 1 !important; background: rgba(255, 150, 200, 0.7) !important; }
-        .emotion-shy .blush { opacity: 1 !important; background: rgba(255, 100, 100, 0.7) !important; }
-        .emotion-sleepy { filter: brightness(0.8); }
-        .emotion-scared { animation: petShake 0.3s ease-in-out infinite !important; }
-        .emotion-whispering { filter: brightness(0.9); }
-        .emotion-confused { animation: petWobble 2s ease-in-out infinite !important; }
-        .emotion-dominant { filter: saturate(1.2) brightness(1.1); }
-        .emotion-loving { filter: saturate(1.1) brightness(1.05); }
-        .emotion-thinking { filter: brightness(0.95); }
-        .emotion-excited { animation: petBounce 0.3s ease-in-out infinite !important; }
-        .emotion-proud { filter: saturate(1.2) brightness(1.1); }
-        .emotion-playful { animation: petBounce 0.5s ease-in-out infinite !important; }
-        .emotion-comforting { filter: saturate(0.9) brightness(1.05); }
-        .emotion-neutral { }
-        .emotion-surprised { }
-
-        /* 生病绿色脸色 */
-        .pet-sick {
-          filter: saturate(0.5) brightness(0.85) hue-rotate(60deg) !important;
-        }
-
-        /* 愤怒眼睛 */
-        .eye-angry {
-          transform: rotate(-15deg);
-        }
-        .eye-angry .pupil {
-          top: 4px;
-          width: 10px;
-          height: 10px;
-        }
-
-        /* 宠物状态条 HUD */
-        .pet-hud {
-          position: absolute;
-          top: 0;
-          left: 50%;
-          transform: translateX(-50%);
-          background: rgba(0, 0, 0, 0.75);
-          border-radius: 12px;
-          padding: 8px 10px;
-          z-index: 100;
-          min-width: 160px;
-          backdrop-filter: blur(8px);
-        }
-        .hud-row {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-          margin-bottom: 4px;
-        }
-        .hud-icon {
-          font-size: 12px;
-          width: 16px;
-          text-align: center;
-        }
-        .hud-bar-bg {
-          flex: 1;
-          height: 6px;
-          background: rgba(255,255,255,0.2);
-          border-radius: 3px;
-          overflow: hidden;
-        }
-        .hud-bar-fill {
-          height: 100%;
-          border-radius: 3px;
-          transition: width 0.5s ease;
-        }
-        .hud-value {
-          font-size: 10px;
-          color: #fff;
-          width: 24px;
-          text-align: right;
-        }
-        .hud-info {
-          justify-content: space-between;
-          font-size: 9px;
-          color: rgba(255,255,255,0.8);
-          margin-top: 4px;
-          margin-bottom: 0;
-        }
-
-        /* 交互按钮 */
-        .action-buttons {
-          display: flex;
-          gap: 4px;
-          margin-top: 4px;
-          flex-wrap: wrap;
-          justify-content: center;
-        }
-        .action-btn {
-          width: 28px;
-          height: 28px;
-          border: none;
-          border-radius: 50%;
-          background: rgba(255,255,255,0.85);
-          font-size: 14px;
-          cursor: pointer;
-          transition: transform 0.2s, background 0.2s;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          padding: 0;
-          line-height: 1;
-        }
-        .action-btn:hover {
-          transform: scale(1.2);
-          background: #fff;
-        }
-        .action-btn:active {
-          transform: scale(0.95);
-        }
-
-        /* 菜单分区标签 */
-        .menu-section-label {
-          padding: 4px 16px;
-          font-size: 11px;
-          color: rgba(255,255,255,0.5);
-          font-weight: 600;
-        }
-      `}</style>
+      <style>{ANIMATION_KEYFRAMES}</style>
     </div>
   );
 }

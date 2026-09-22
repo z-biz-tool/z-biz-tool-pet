@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Row, Col, Badge, Typography, Progress, Modal, Tag, Space } from 'antd';
-import { StarOutlined, TrophyOutlined, GiftOutlined, CheckCircleOutlined } from '@ant-design/icons';
+import { Card, Row, Col, Badge, Typography, Progress, Tag, Space } from 'antd';
+import { TrophyOutlined, CheckCircleOutlined } from '@ant-design/icons';
 
 const { Title, Text } = Typography;
 
@@ -39,9 +39,8 @@ const ACHIEVEMENTS: Achievement[] = [
   { id: 'total_100_talk', title: '聊天达人', description: '总共聊天100次', icon: '📝', reward: { affection: 30, happiness: 30, badge: '🎤' }, unlocked: false, order: 90 },
 ];
 
-const AchievementPanel: React.FC<AchievementPanelProps> = ({ open, onClose }) => {
+const AchievementPanel: React.FC<AchievementPanelProps> = ({ open }) => {
   const [unlockProgress, setUnlockProgress] = useState({ current: 0, total: 0, percentage: 0 });
-  const [unlockedAchievements, setUnlockedAchievements] = useState<Achievement[]>([]);
 
   useEffect(() => {
     if (open) {
@@ -54,7 +53,6 @@ const AchievementPanel: React.FC<AchievementPanelProps> = ({ open, onClose }) =>
     const saved = localStorage.getItem('achievement_data');
     if (saved) {
       const data = JSON.parse(saved);
-      setUnlockedAchievements(data.unlocked || []);
       setUnlockProgress(data.progress || { current: 0, total: 0, percentage: 0 });
     } else {
       // 初始状态
@@ -64,29 +62,6 @@ const AchievementPanel: React.FC<AchievementPanelProps> = ({ open, onClose }) =>
         progress: { current: 0, total: 12, percentage: 0 },
       }));
     }
-  };
-
-  const handleUnlock = (achievement: Achievement) => {
-    const newUnlocked = [...unlockedAchievements, achievement];
-    setUnlockedAchievements(newUnlocked);
-    
-    // 更新进度
-    const percentage = Math.round((newUnlocked.length / ACHIEVEMENTS.length) * 100);
-    setUnlockProgress({ current: newUnlocked.length, total: ACHIEVEMENTS.length, percentage });
-    
-    // 保存
-    localStorage.setItem('achievement_data', JSON.stringify({
-      unlocked: newUnlocked,
-      progress: { current: newUnlocked.length, total: ACHIEVEMENTS.length, percentage },
-    }));
-  };
-
-  const getAchievementColor = (achievement: Achievement) => {
-    if (achievement.unlocked) return 'gold';
-    if (achievement.order <= 3) return 'blue';
-    if (achievement.order <= 10) return 'cyan';
-    if (achievement.order <= 20) return 'green';
-    return 'purple';
   };
 
   return (

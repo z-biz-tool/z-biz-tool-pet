@@ -390,13 +390,13 @@ async function streamOllama(
   }
 
   let fullContent = '';
+  let streamToolCalls: any[] | undefined;
   const reader = response.body;
   if (!reader) throw new Error('Ollama 流式响应无 body');
 
   const decoder = new TextDecoder();
   const buffer: string[] = [];
 
-  // @ts-ignore - Node.js ReadableStream 兼容
   for await (const chunk of reader as AsyncIterable<Buffer>) {
     buffer.push(decoder.decode(chunk, { stream: true }));
     const text = buffer.join('');
@@ -413,6 +413,10 @@ async function streamOllama(
           fullContent += data.message.content;
           sender('ai:streamChunk', { content: data.message.content, done: false });
         }
+        // ollama 在最后一个 chunk 里给出 tool_calls；不收集的话流式请求会静默丢工具
+        if (Array.isArray(data.message?.tool_calls) && data.message.tool_calls.length) {
+          streamToolCalls = data.message.tool_calls;
+        }
         if (data.done) {
           sender('ai:streamChunk', { content: '', done: true });
         }
@@ -420,7 +424,7 @@ async function streamOllama(
     }
   }
 
-  return { content: fullContent };
+  return { content: fullContent, toolCalls: streamToolCalls };
 }
 
 async function streamOpenAICompatible(
@@ -461,13 +465,13 @@ async function streamOpenAICompatible(
   }
 
   let fullContent = '';
+  const streamToolCalls: any[] = [];
   const reader = response.body;
   if (!reader) throw new Error('流式响应无 body');
 
   const decoder = new TextDecoder();
   const buffer: string[] = [];
 
-  // @ts-ignore
   for await (const chunk of reader as AsyncIterable<Buffer>) {
     buffer.push(decoder.decode(chunk, { stream: true }));
     const text = buffer.join('');
@@ -491,11 +495,21 @@ async function streamOpenAICompatible(
           fullContent += delta;
           sender('ai:streamChunk', { content: delta, done: false });
         }
+        // OpenAI 把 tool_calls 按 index 分片下发，必须聚合后才能还原完整参数
+        const tcDeltas = data.choices?.[0]?.delta?.tool_calls;
+        for (const t of tcDeltas || []) {
+          const i = typeof t.index === 'number' ? t.index : 0;
+          const cur = streamToolCalls[i] ||
+            (streamToolCalls[i] = { id: '', type: 'function', function: { name: '', arguments: '' } });
+          if (t.id) cur.id = t.id;
+          if (t.function?.name) cur.function.name += t.function.name;
+          if (t.function?.arguments) cur.function.arguments += t.function.arguments;
+        }
       } catch { /* skip */ }
     }
   }
 
-  return { content: fullContent };
+  return { content: fullContent, toolCalls: streamToolCalls.length ? streamToolCalls : undefined };
 }
 
 async function streamClaude(
@@ -555,7 +569,6 @@ async function streamClaude(
   const decoder = new TextDecoder();
   const buffer: string[] = [];
 
-  // @ts-ignore
   for await (const chunk of reader as AsyncIterable<Buffer>) {
     buffer.push(decoder.decode(chunk, { stream: true }));
     const text = buffer.join('');
@@ -632,7 +645,6 @@ async function streamGemini(
   const decoder = new TextDecoder();
   const buffer: string[] = [];
 
-  // @ts-ignore
   for await (const chunk of reader as AsyncIterable<Buffer>) {
     buffer.push(decoder.decode(chunk, { stream: true }));
     const text = buffer.join('');
