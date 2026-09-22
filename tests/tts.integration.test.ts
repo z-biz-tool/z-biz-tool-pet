@@ -116,8 +116,20 @@ describe('TTS 服务端到端', () => {
       expect(r.data.error).toContain('离线');
       return;
     }
+    if (process.platform === 'win32') {
+      // Windows 的引擎是 powershell + System.Speech，CI runner 上未必装了可用音色。
+      // 硬契约只有一条：200 就必须带能播的音频，否则只能是带原因的 500/503。
+      // （这里曾经真实返回过 200 + 64 B 空 wav 头，用户侧表现为"说话却是静音"。）
+      expect([200, 500, 503]).toContain(r.status);
+      if (r.status !== 200) {
+        expect(typeof r.data.error).toBe('string');
+        expect(r.data.error.length).toBeGreaterThan(0);
+        return;
+      }
+    }
     expect(r.status).toBe(200);
     expect(typeof r.data.audio).toBe('string');
+    // 44 B 是空 wav 头，base64 后约 60 字符；阈值远高于它才能挡住静音
     expect(r.data.audio.length).toBeGreaterThan(100);
     expect(['mp3', 'wav', 'aiff']).toContain(r.data.format);
     // 首字节延迟目标 A05 < 500ms 只做记录，本机负载不稳，不做硬断言

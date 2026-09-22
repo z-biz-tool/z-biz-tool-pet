@@ -28,20 +28,48 @@ app.use((req, res, next) => {
 const BASE_DIR = process.env.ZBOT_DATA_DIR || path.join(os.homedir(), '.z-bot');
 const DEFAULT_MODEL = path.join(BASE_DIR, 'models', 'ggml-base.bin');
 const MODEL_PATH = process.env.ZBOT_WHISPER_MODEL || DEFAULT_MODEL;
-function resolveWhisperBin() {
-  if (process.env.ZBOT_WHISPER_BIN) return process.env.ZBOT_WHISPER_BIN;
+function resolveWhisperBin(platform = process.platform, env = process.env) {
+  if (env.ZBOT_WHISPER_BIN) return env.ZBOT_WHISPER_BIN;
+  // Windows 上可执行文件必须带 .exe：按 POSIX 的名字找会永远落空，导致这台机器上
+  // 明明装了 whisper 却一路 503。
+  const name = platform === 'win32' ? 'whisper-cli.exe' : 'whisper-cli';
   // 开发态随仓库走；打包后 Resources 内不放二进制，回退到 PATH 上的安装
-  const bundled = path.join(__dirname, '../whisper.cpp/build/bin/whisper-cli');
+  const bundled = path.join(__dirname, '../whisper.cpp/build/bin', name);
   if (fs.existsSync(bundled)) return bundled;
-  const dirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  const dirs = (env.PATH || '').split(path.delimiter).filter(Boolean);
   for (const d of dirs) {
-    const p = path.join(d, 'whisper-cli');
+    const p = path.join(d, name);
     if (fs.existsSync(p)) return p;
   }
   return bundled;
 }
 
 const WHISPER_BIN = resolveWhisperBin();
+
+/**
+ * 每个请求只允许写一次响应。
+ *
+ * Why：spawn 失败时 Windows 会在 'error' 之后再补一个 'close'，两个分支各写一次
+ * 同一个 res；第二次 res.status().json() 抛 ERR_HTTP_HEADERS_SENT，而它是从
+ * EventEmitter 回调里冒出来的 —— 没人 catch 就会直接打死整个服务进程，顺带触发
+ * 'exit' 钩子把私有工作目录删掉（表现成"后续请求 ECONNRESET + 目录扫不到"）。
+ */
+function onceResponder(res) {
+  let done = false;
+  return function respond(status, body) {
+    if (done) {
+      console.warn(`[STT] 忽略重复响应 ${status}`);
+      return false;
+    }
+    done = true;
+    try {
+      res.status(status).json(body);
+    } catch (e) {
+      console.error('[STT] 响应写入失败:', e.message);
+    }
+    return true;
+  };
+}
 
 function missingWhisper() {
   if (!fs.existsSync(WHISPER_BIN)) {
@@ -97,14 +125,15 @@ app.get('/health', (req, res) => {
 });
 
 app.post('/transcribe', (req, res) => {
+  const send = onceResponder(res);
   const { audio } = req.body;
 
   if (!audio) {
-    return res.status(400).json({ error: 'No audio provided' });
+    return send(400, { error: 'No audio provided' });
   }
   const problem = missingWhisper();
   if (problem) {
-    return res.status(503).json({ error: problem });
+    return send(503, { error: problem });
   }
 
   console.log('[STT] Audio base64 length:', audio.length);
@@ -113,10 +142,10 @@ app.post('/transcribe', (req, res) => {
   try {
     buffer = Buffer.from(audio, 'base64');
   } catch (e) {
-    return res.status(400).json({ error: `音频 base64 解码失败: ${e.message}` });
+    return send(400, { error: `音频 base64 解码失败: ${e.message}` });
   }
   if (!buffer.length) {
-    return res.status(400).json({ error: '音频为空' });
+    return send(400, { error: '音频为空' });
   }
 
   const tempWav = tmpPath('.wav');
@@ -127,9 +156,9 @@ app.post('/transcribe', (req, res) => {
       fs.writeFileSync(tempWav, buffer);
     } catch (e) {
       cleanup(tempWav);
-      return res.status(500).json({ error: `写入临时文件失败: ${e.message}` });
+      return send(500, { error: `写入临时文件失败: ${e.message}` });
     }
-    return runWhisper(tempWav, res, 'wav-passthrough');
+    return runWhisper(tempWav, send, 'wav-passthrough');
   }
 
   const tempWebm = tmpPath('.webm');
@@ -138,7 +167,7 @@ app.post('/transcribe', (req, res) => {
   } catch (e) {
     cleanup(tempWebm);
     cleanup(tempWav);
-    return res.status(500).json({ error: `写入临时文件失败: ${e.message}` });
+    return send(500, { error: `写入临时文件失败: ${e.message}` });
   }
 
   // Convert webm to wav using ffmpeg
@@ -152,7 +181,7 @@ app.post('/transcribe', (req, res) => {
   ffmpeg.on('error', (e) => {
     cleanup(tempWebm);
     cleanup(tempWav);
-    res.status(500).json({ error: 'ffmpeg 不可用，无法转换音频', details: e.message });
+    send(500, { error: 'ffmpeg 不可用，无法转换音频', details: e.message });
   });
 
   ffmpeg.on('close', (code) => {
@@ -166,10 +195,11 @@ app.post('/transcribe', (req, res) => {
       const hint = /Library not loaded|dyld/i.test(ffmpegError)
         ? 'ffmpeg 安装已损坏（动态库缺失），需重装 ffmpeg，否则语音输入与会议转录不可用'
         : 'ffmpeg 转码失败';
-      return res.status(503).json({ error: hint, details: ffmpegError.slice(-300) });
+      send(503, { error: hint, details: ffmpegError.slice(-300) });
+      return;
     }
 
-    runWhisper(tempWav, res, 'ffmpeg');
+    runWhisper(tempWav, send, 'ffmpeg');
   });
 });
 
@@ -181,8 +211,8 @@ function isWav(buffer) {
   );
 }
 
-/** webm（需转码）与 wav（直通）共用同一次 whisper 调用 */
-function runWhisper(wavPath, res, via) {
+/** webm（需转码）与 wav（直通）共用同一次 whisper 调用；send 是这一请求的一次性闸门 */
+function runWhisper(wavPath, send, via) {
   const args = [
     '-m', MODEL_PATH,
     '-f', wavPath,
@@ -206,17 +236,18 @@ function runWhisper(wavPath, res, via) {
   });
   whisper.on('error', (e) => {
     cleanup(wavPath);
-    if (!res.headersSent) res.status(500).json({ error: 'whisper 启动失败', details: e.message });
+    send(500, { error: 'whisper 启动失败', details: e.message });
   });
   whisper.on('close', (code) => {
     cleanup(wavPath);
     if (code !== 0) {
       console.error('[STT] Whisper error:', whisperError);
-      return res.status(500).json({ error: 'Transcription failed', details: whisperError });
+      send(500, { error: 'Transcription failed', details: whisperError });
+      return;
     }
     const text = output.trim();
     console.log('[STT] Result:', text || '(empty)');
-    res.json({ text, via });
+    send(200, { text, via });
   });
 }
 
@@ -224,4 +255,4 @@ const server = app.listen(PORT, HOST, () => {
   console.log(`[STT Server] Running on http://${HOST}:${PORT}`);
 });
 
-module.exports = { app, server, workDir };
+module.exports = { app, server, workDir, onceResponder, resolveWhisperBin };

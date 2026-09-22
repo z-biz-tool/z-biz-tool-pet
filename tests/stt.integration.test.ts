@@ -143,7 +143,11 @@ describe('STT 服务端到端', () => {
     expect(r.status).toBe(401);
   });
 
-  it('带 token 提交 wav → 返回识别文本（wav 直通，不需 ffmpeg）', async () => {
+  // stub 是一个 #!/bin/sh 脚本，Windows 上 CreateProcess 跑不了 POSIX 脚本，
+  // 这条 happy path 只能在 POSIX 侧验证。Windows 侧同一入口由下面"不可执行文件"
+  // 那组用例覆盖（500 + 服务不能被一次失败请求打死），别把这里的跳过当成
+  // "Windows 不需要测"。
+  it.skipIf(process.platform === 'win32')('带 token 提交 wav → 返回识别文本（wav 直通，不需 ffmpeg）', async () => {
     const audio = fs.readFileSync(sampleWav).toString('base64');
     const r = await post({ audio }, TOKEN);
     expect(r.status).toBe(200);
@@ -199,5 +203,42 @@ describe('模型缺失时明确报错（doc 06 §2.4 故障注入）', () => {
     const r = await post({ audio: 'AAAA' }, TOKEN);
     expect(r.status).toBe(503);
     expect(r.data.error).toContain('ZBOT_WHISPER_BIN');
+  });
+});
+
+describe('spawn 失败不得打死服务（Windows CI 实测回归）', () => {
+  // Windows 腿曾出现：stub 不可执行 → 'error' 分支已经写过响应，'close' 又写一次，
+  // 第二次的 ERR_HTTP_HEADERS_SENT 从 EventEmitter 回调里冒出来没人 catch，进程直接退出，
+  // 连 'exit' 钩子把私有工作目录一起删掉 ⇒ 后续请求全成 ECONNRESET。
+  // 这里用"存在但不可执行"的二进制触发同一条路径（POSIX 是 EACCES，Windows 是 EINVAL）。
+  let badBin: string;
+
+  beforeAll(async () => {
+    await stopServer();
+    // 上一组用例把模型删掉了，这里要的是"模型与 bin 都在，但 bin 跑不起来"
+    fs.writeFileSync(modelPath, 'fake-model');
+    badBin = path.join(dir, 'not-executable-cli');
+    fs.writeFileSync(badBin, 'this is not a program\n', { mode: 0o644 });
+    fs.chmodSync(badBin, 0o644);
+    await startServer({ ZBOT_DATA_DIR: dir, ZBOT_WHISPER_BIN: badBin });
+  });
+
+  afterAll(async () => {
+    await stopServer();
+    try {
+      fs.rmSync(badBin, { force: true });
+    } catch {}
+  });
+
+  it('请求返回 500 且带原因，进程仍然存活', async () => {
+    const audio = fs.readFileSync(sampleWav).toString('base64');
+    const r = await post({ audio }, TOKEN);
+    expect(r.status).toBe(500);
+    expect(r.data.error).toContain('whisper 启动失败');
+    // 关键：失败请求之后服务还必须能应答，否则整条语音链路随一次异常全挂
+    const health = await get('/health');
+    expect(health.status).toBe(200);
+    const again = await post({ audio }, TOKEN);
+    expect(again.status).toBe(500);
   });
 });

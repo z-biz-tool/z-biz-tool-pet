@@ -123,25 +123,39 @@ function synthesizeMac(text, voice, outAiff) {
 }
 
 function synthesizeWindows(text, outFile) {
+  // 文本走 UTF-8 临时文件，不再用 stdin：[Console]::In.ReadToEnd() 在
+  // -NonInteractive + 管道 stdin 下会读到空串，PowerShell 于是"成功"退出并留下
+  // 一个只有头的 wav（实测 64 B），上层把静音当成合成成功播了出去。
+  const textFile = tmpPath('.txt');
+  fs.writeFileSync(textFile, text, 'utf-8');
+  const q = (p) => `'${String(p).replace(/'/g, "''")}'`;
   return new Promise((resolve, reject) => {
-    // 通过 SpeakSapi 输出 wav；文本走 stdin 拼接避免命令行注入
-    const ps = `
-$ErrorActionPreference='Stop'
-Add-Type -AssemblyName System.Speech
-$s = New-Object System.Speech.Synthesis.SpeechSynthesizer
-$s.SetOutputToWaveFile('${outFile.replace(/'/g, "''")}')
-$s.Speak([Console]::In.ReadToEnd())
-$s.Dispose()
-`;
+    const ps = [
+      "$ErrorActionPreference='Stop'",
+      'Add-Type -AssemblyName System.Speech',
+      '$s = New-Object System.Speech.Synthesis.SpeechSynthesizer',
+      `$s.SetOutputToWaveFile(${q(outFile)})`,
+      `$t = Get-Content -Raw -Encoding UTF8 ${q(textFile)}`,
+      'if ([string]::IsNullOrWhiteSpace($t)) { throw "文本读取为空" }',
+      '$s.Speak($t)',
+      '$s.Dispose()',
+    ].join('\n');
     const powershell = spawn('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps]);
     let err = '';
     powershell.stderr.on('data', (d) => (err += d.toString()));
-    powershell.on('error', reject);
-    powershell.stdin.write(text);
-    powershell.stdin.end();
+    powershell.on('error', (e) => {
+      cleanup(textFile);
+      reject(e);
+    });
     powershell.on('close', (code) => {
-      if (code === 0 && fs.existsSync(outFile)) resolve();
-      else reject(new Error(err || `powershell 退出码 ${code}`));
+      cleanup(textFile);
+      let size = 0;
+      try {
+        size = fs.statSync(outFile).size;
+      } catch {}
+      // 44 B 是空 wav 头；阈值留够余量，宁肯报错也不回一段静音
+      if (code === 0 && size > 1000) resolve();
+      else reject(new Error(`powershell 退出码 ${code}，产出 ${size} B${err ? '：' + err.slice(-300) : ''}`));
     });
   });
 }
