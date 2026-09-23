@@ -43,8 +43,10 @@ import {
   getAdminWindow,
   getPetWindow,
   initWindowManager,
+  isPetClickThrough,
   isStealthMode,
   sendToWindows,
+  setPetClickThrough,
   setStealthMode,
   showAdminWindow,
   stopWindowTimers,
@@ -127,6 +129,11 @@ function trayContext(): TrayContext {
     getStealthMode: () => isStealthMode(),
     setStealthMode: (enabled) => {
       void setStealthMode(enabled);
+    },
+    getClickThrough: () => isPetClickThrough(),
+    setClickThrough: (enabled) => {
+      setPetClickThrough(enabled);
+      refreshTrayMenu();
     },
     quit: () => {
       (app as any).isQuitting = true;

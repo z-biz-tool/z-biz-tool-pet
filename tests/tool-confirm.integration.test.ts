@@ -1,4 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import {
+  acquire,
+  resetLimiter,
+  limiterSnapshot,
+  MAX_TOOL_CALLS_PER_TURN,
+} from '../src/main/tool-limiter';
 
 /**
  * 工具确认流程集成测试（doc 06 §2.2 P0 / A08 / A12 / D08）
@@ -237,5 +243,62 @@ describe('SENSITIVE 的"总是允许"', () => {
     const out2 = await run2;
     expect(sent.filter((s) => s.channel === 'tools:confirmRequest')).toHaveLength(before); // 没再弹
     expect(out2.toolResults[0].isError).toBe(false);
+  });
+});
+
+describe('限流与熔断（02 §2.9）', () => {
+  const call = (id: string, name: string, args: Record<string, any> = {}) => ({
+    content: '',
+    toolCalls: [{ id, type: 'function', function: { name, arguments: JSON.stringify(args) } }],
+  });
+
+  it('触发频率限制时不再弹确认，直接把限制告知 AI', async () => {
+    resetLimiter();
+    // 先自行耗尽 execute_command 的窗口配额（模拟 AI 疯狂重试）
+    for (let i = 0; i < 12; i++) expect(acquire('execute_command').allowed).toBe(true);
+
+    const run = runToolCalls([{ role: 'user', content: 'x' }], 'm', call('call_rl', 'execute_command', { command: 'ls' }) as any, async () =>
+      ({ content: 'ok' } as any)
+    );
+    const out = await run;
+
+    expect(sent.filter((s) => s.channel === 'tools:confirmRequest')).toHaveLength(0);
+    expect(executed).toHaveLength(0);
+    expect(out.toolResults[0].isError).toBe(true);
+    expect(out.toolResults[0].result).toContain('频率限制');
+    resetLimiter();
+  });
+
+  it('用户拒绝确认不消耗频率配额', async () => {
+    resetLimiter();
+    const before = limiterSnapshot('open_app').calls;
+    const run = runToolCalls([{ role: 'user', content: 'x' }], 'm', call('call_rel', 'open_app', { appName: 'Safari' }) as any, async () =>
+      ({ content: 'ok' } as any)
+    );
+    for (let i = 0; i < 50 && sent.length === 0; i++) await new Promise((r) => setTimeout(r, 5));
+    await respond('call_rel', false);
+    await run;
+    expect(limiterSnapshot('open_app').calls).toBe(before);
+    resetLimiter();
+  });
+
+  it('单轮内工具调用数封顶，防 AI 自我循环', async () => {
+    resetLimiter();
+    const response = {
+      content: '',
+      toolCalls: Array.from({ length: MAX_TOOL_CALLS_PER_TURN + 3 }, (_, i) => ({
+        id: `loop_${i}`,
+        type: 'function',
+        function: { name: 'get_datetime', arguments: '{}' },
+      })),
+    };
+    const out = await runToolCalls([{ role: 'user', content: 'x' }], 'm', response as any, async () =>
+      ({ content: 'ok' } as any)
+    );
+    expect(executed).toHaveLength(MAX_TOOL_CALLS_PER_TURN);
+    expect(out.toolResults).toHaveLength(MAX_TOOL_CALLS_PER_TURN + 3);
+    expect(out.toolResults[MAX_TOOL_CALLS_PER_TURN].result).toContain('上限');
+    expect(out.toolResults[MAX_TOOL_CALLS_PER_TURN].isError).toBe(true);
+    resetLimiter();
   });
 });

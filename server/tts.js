@@ -91,6 +91,31 @@ function pickMacVoice(requested) {
   return null;
 }
 
+/**
+ * 语速倍率归一到 [0.5, 2]，非法值回退 1。
+ * 各引擎只接受 wpm / 整数档位，所以这里必须产出确定性的整数输入。
+ */
+function normalizeSpeed(raw) {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return 1;
+  return Math.min(2, Math.max(0.5, n));
+}
+
+/** macOS say 默认约 180 wpm */
+function macWpm(speed) {
+  return Math.round(180 * speed);
+}
+
+/** espeak-ng 默认约 175 wpm */
+function espeakWpm(speed) {
+  return Math.round(175 * speed);
+}
+
+/** SAPI 的 Rate 是 -10..10 的对数档位，倍率 1 对应 0 */
+function sapiRate(speed) {
+  return Math.max(-10, Math.min(10, Math.round(10 * Math.log2(speed))));
+}
+
 /** 用 ffmpeg 把引擎产物统一转成 mp3；ffmpeg 不可用则原样返回 */
 function toMp3(src, dst) {
   return new Promise((resolve) => {
@@ -105,11 +130,12 @@ function toMp3(src, dst) {
   });
 }
 
-function synthesizeMac(text, voice, outAiff) {
+function synthesizeMac(text, voice, outAiff, speed) {
   return new Promise((resolve, reject) => {
     const args = ['-o', outAiff];
     const picked = pickMacVoice(voice);
     if (picked) args.unshift('-v', picked);
+    if (speed !== 1) args.unshift('-r', String(macWpm(speed)));
     args.push(text);
     const say = spawn('say', args);
     let err = '';
@@ -122,7 +148,7 @@ function synthesizeMac(text, voice, outAiff) {
   });
 }
 
-function synthesizeWindows(text, outFile) {
+function synthesizeWindows(text, outFile, speed) {
   // 文本走 UTF-8 临时文件，不再用 stdin：[Console]::In.ReadToEnd() 在
   // -NonInteractive + 管道 stdin 下会读到空串，PowerShell 于是"成功"退出并留下
   // 一个只有头的 wav（实测 64 B），上层把静音当成合成成功播了出去。
@@ -134,6 +160,7 @@ function synthesizeWindows(text, outFile) {
       "$ErrorActionPreference='Stop'",
       'Add-Type -AssemblyName System.Speech',
       '$s = New-Object System.Speech.Synthesis.SpeechSynthesizer',
+      ...(speed !== 1 ? [`$s.Rate = ${sapiRate(speed)}`] : []),
       `$s.SetOutputToWaveFile(${q(outFile)})`,
       `$t = Get-Content -Raw -Encoding UTF8 ${q(textFile)}`,
       'if ([string]::IsNullOrWhiteSpace($t)) { throw "文本读取为空" }',
@@ -160,12 +187,12 @@ function synthesizeWindows(text, outFile) {
   });
 }
 
-function synthesizeLinux(text, outFile) {
+function synthesizeLinux(text, outFile, speed) {
   const bin = hasBinary('espeak-ng') ? 'espeak-ng' : 'festival';
   return new Promise((resolve, reject) => {
     const child =
       bin === 'espeak-ng'
-        ? spawn(bin, ['-w', outFile, text])
+        ? spawn(bin, speed !== 1 ? ['-s', String(espeakWpm(speed)), '-w', outFile, text] : ['-w', outFile, text])
         : spawn(bin, ['--tts', '--output', outFile]);
     let err = '';
     if (bin === 'festival') {
@@ -193,6 +220,7 @@ app.get('/health', (req, res) => {
 
 app.post('/speak', async (req, res) => {
   const { text, voice } = req.body;
+  const speed = normalizeSpeed(req.body.speed);
 
   if (!text) {
     return res.status(400).json({ error: 'No text provided' });
@@ -202,15 +230,15 @@ app.post('/speak', async (req, res) => {
   }
 
   const clipped = String(text).slice(0, 2000);
-  console.log('[TTS] Speaking:', clipped.slice(0, 50));
+  console.log('[TTS] Speaking:', clipped.slice(0, 50), 'speed:', speed);
 
   const rawOut = tmpPath(process.platform === 'darwin' ? '.aiff' : '.wav');
   const mp3Out = tmpPath('.mp3');
 
   try {
-    if (process.platform === 'darwin') await synthesizeMac(clipped, voice, rawOut);
-    else if (process.platform === 'win32') await synthesizeWindows(clipped, rawOut);
-    else await synthesizeLinux(clipped, rawOut);
+    if (process.platform === 'darwin') await synthesizeMac(clipped, voice, rawOut, speed);
+    else if (process.platform === 'win32') await synthesizeWindows(clipped, rawOut, speed);
+    else await synthesizeLinux(clipped, rawOut, speed);
   } catch (e) {
     console.error('[TTS] Error:', e.message);
     cleanup(rawOut);
@@ -234,8 +262,12 @@ app.post('/speak', async (req, res) => {
   }
 });
 
-const server = app.listen(PORT, HOST, () => {
-  console.log(`[TTS Server] Running on http://${HOST}:${PORT} (local engine: ${process.platform})`);
-});
+// 只有作为脚本启动时才占用端口；被 require 时（如单测读取纯函数）不监听，避免抢端口
+let server = null;
+if (require.main === module) {
+  server = app.listen(PORT, HOST, () => {
+    console.log(`[TTS Server] Running on http://${HOST}:${PORT} (local engine: ${process.platform})`);
+  });
+}
 
-module.exports = { app, server, workDir };
+module.exports = { app, server, workDir, normalizeSpeed, macWpm, espeakWpm, sapiRate };

@@ -229,6 +229,9 @@ export function createPetWindow() {
     petWindow.setPosition(saved.x, saved.y);
   }
 
+  // 穿透开关跨窗口重建保持
+  if (clickThrough) petWindow.setIgnoreMouseEvents(true, { forward: true });
+
   // 移动结束后再落盘，避免拖拽期间高频写盘
   let boundsSaveTimer: NodeJS.Timeout | null = null;
   const persistLater = () => {
@@ -332,6 +335,25 @@ function clampToDisplay(x: number, y: number, w: number, h: number): [number, nu
   const clampedX = Math.max(ax, Math.min(ax + width - w, Math.round(x)));
   const clampedY = Math.max(ay, Math.min(ay + height - h, Math.round(y)));
   return [clampedX, clampedY];
+}
+
+// ---------- 点击穿透（02 §2.1）----------
+// 开启后鼠标事件穿过宠物窗口，不遮挡底层操作；forward 保留 hover 以便动画继续。
+// 只能由托盘菜单关闭（穿透时窗口收不到点击，渲染进程无法自救）。
+let clickThrough = false;
+
+export function isPetClickThrough(): boolean {
+  return clickThrough;
+}
+
+export function setPetClickThrough(enabled: boolean): void {
+  clickThrough = enabled;
+  if (!petWindow || petWindow.isDestroyed()) return;
+  if (enabled) {
+    petWindow.setIgnoreMouseEvents(true, { forward: true });
+  } else {
+    petWindow.setIgnoreMouseEvents(false);
+  }
 }
 
 // ---------- IPC: 贴墙滑下效果 ----------

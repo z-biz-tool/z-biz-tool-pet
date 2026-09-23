@@ -49,6 +49,9 @@ const DEFAULT_PROMPT = '你是一只可爱的桌面萌宠小猫咪，名字叫Z-
 // 语音打断阈值（可配置，默认30）
 const INTERRUPT_THRESHOLD = 30;
 
+// 录音硬上限：MediaRecorder 的分片全在内存里，按住不放不该无限录（02 §2.4）
+const MAX_RECORDING_MS = 30_000;
+
 // 生命周期阶段对应的体型（此前 JSX 直接引用未定义的 STAGE_SIZES）
 const STAGE_SIZES: Record<PetCoreStats['stage'], number> = {
   egg: 90,
@@ -190,6 +193,7 @@ function App() {
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
+  const recordCapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const dragStateRef = useRef<{ dragging: boolean; startX: number; startY: number }>({
     dragging: false,
     startX: 0,
@@ -505,6 +509,13 @@ function App() {
       mediaRecorder.start();
       setStatus('recording');
       log('[Pet] 录音中...');
+      recordCapTimerRef.current = setTimeout(() => {
+        recordCapTimerRef.current = null;
+        if (statusRef.current !== 'recording') return;
+        log('[Pet] 录音达到上限，自动停止');
+        setHint(`录音已达 ${Math.round(MAX_RECORDING_MS / 1000)}s 上限`);
+        stopRecording();
+      }, MAX_RECORDING_MS);
     } catch (error: any) {
       log('[Pet] 录音错误: ' + error.message);
       if (error?.name === 'NotAllowedError' || error?.name === 'PermissionDeniedError') {
@@ -515,6 +526,10 @@ function App() {
   };
 
   const stopRecording = () => {
+    if (recordCapTimerRef.current) {
+      clearTimeout(recordCapTimerRef.current);
+      recordCapTimerRef.current = null;
+    }
     if (mediaRecorderRef.current && statusRef.current === 'recording') {
       log('[Pet] 停止录音');
       mediaRecorderRef.current.stop();

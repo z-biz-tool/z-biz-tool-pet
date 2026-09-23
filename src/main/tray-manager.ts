@@ -12,6 +12,8 @@ export interface TrayContext {
   sendVoice: (event: 'voice:start' | 'voice:stop') => void;
   getStealthMode: () => boolean;
   setStealthMode: (enabled: boolean) => void;
+  getClickThrough: () => boolean;
+  setClickThrough: (enabled: boolean) => void;
   quit: () => void;
 }
 
@@ -34,6 +36,12 @@ export function buildTrayTemplate(ctx: TrayContext): MenuItemConstructorOptions[
       type: 'checkbox',
       checked: ctx.getStealthMode(),
       click: (item) => ctx.setStealthMode(item.checked),
+    },
+    {
+      label: '🫥 点击穿透',
+      type: 'checkbox',
+      checked: ctx.getClickThrough(),
+      click: (item) => ctx.setClickThrough(item.checked),
     },
     { type: 'separator' },
     { label: '⚙️ 设置', click: () => ctx.openSettings() },

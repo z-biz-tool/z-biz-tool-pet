@@ -289,7 +289,9 @@ ipcMain.handle('voice:speak', async (_, text: string, voice?: string) => {
   const svc = getVoiceService();
   if (!svc) return { success: false, error: '语音服务未启动' };
   try {
-    const data = await postJson(svc.ttsBaseUrl(), '/speak', { text, voice });
+    // 语速取自主进程配置，渲染进程无法伪造（voiceSpeed 此前只是设置面板里的摆设）
+    const { voiceSpeed } = loadConfigFromFile();
+    const data = await postJson(svc.ttsBaseUrl(), '/speak', { text, voice, speed: voiceSpeed ?? 1 });
     return { success: true, audio: data.audio, format: data.format };
   } catch (e: any) {
     console.error('[Z-Bot Main] TTS 失败:', e.message);

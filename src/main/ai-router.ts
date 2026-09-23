@@ -7,12 +7,14 @@ import type { ToolCall, ToolResult } from './mcp-tools';
 import { checkQuickCommand } from './quick-commands';
 import { extractMemoryFromConversation } from './memory-system';
 import { guardCommand, allowAlwaysOnApproval, describeToolCall, toolRiskLevel, ToolRiskLevel } from './security';
+import { acquire, release, recordOutcome, MAX_TOOL_CALLS_PER_TURN } from './tool-limiter';
 import { createAdminWindow, getAdminWindow, getPetWindow, sendToWindows } from './window-manager';
 
 /**
  * AI 路由与 MCP 工具编排（doc/优化方案 T3.1）。
  * 安全要点集中在此：高危命令在进入确认前就被拦掉（guardCommand）、
  * DANGEROUS 每次必确认（needsConfirmation）、确认走 toolCallId 契约（D08/D09），
+ * 频率窗口/熔断/单轮封顶在执行前统一判定（tool-limiter），
  * 流式与非流式共用同一个 runToolCalls，避免两条路径的安全逻辑漂移。
  * 配置由装配方注入，避免与 index.ts 形成循环依赖。
  */
@@ -157,6 +159,7 @@ export async function runToolCalls(
   followUp: (req: ChatRequest) => Promise<ChatResponse>
 ): Promise<{ toolResults: ToolResult[]; final: ChatResponse }> {
   const toolResults: ToolResult[] = [];
+  let executed = 0;
 
   for (const tc of response.toolCalls || []) {
     const toolCall: ToolCall = {
@@ -180,9 +183,26 @@ export async function runToolCalls(
       }
     }
 
+    // 限流/熔断在确认弹窗之前判定，避免无谓打扰用户（02 §2.9）
+    if (executed >= MAX_TOOL_CALLS_PER_TURN) {
+      toolResults.push({
+        toolCallId: toolCall.id,
+        result: `本轮工具调用已达上限 ${MAX_TOOL_CALLS_PER_TURN} 次，请基于已有结果直接回答`,
+        isError: true,
+      });
+      continue;
+    }
+    const slot = acquire(toolCall.name);
+    if (!slot.allowed) {
+      toolResults.push({ toolCallId: toolCall.id, result: slot.reason, isError: true });
+      continue;
+    }
+
     if (needsConfirmation(toolCall.name)) {
       const decision = await requestToolConfirmation(toolCall);
       if (!decision.approved) {
+        // 未真正执行，归还频率配额
+        release(toolCall.name);
         toolResults.push({ toolCallId: toolCall.id, result: '用户拒绝了此操作', isError: true });
         continue;
       }
@@ -193,6 +213,8 @@ export async function runToolCalls(
 
     const result = await executeTool(toolCall.name, toolCall.arguments);
     result.toolCallId = toolCall.id;
+    recordOutcome(toolCall.name, !result.isError);
+    executed += 1;
     toolResults.push(result);
 
     // 特殊处理: control_pet 触发动画
