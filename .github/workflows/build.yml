@@ -1,0 +1,61 @@
+name: Build & Package
+
+# 打 tag（v*）才出包：electron-builder 三腿 —— mac dmg+zip（arm64/x64，identity: null 不签名）、
+# win nsis+portable（无签名）、linux AppImage。产物只传 Actions artifact，不自动建 Release。
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            script: build:mac
+            label: macOS
+          - os: windows-latest
+            script: build:win
+            label: Windows
+          - os: ubuntu-latest
+            script: build:linux
+            label: Linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install npm dependencies
+        run: npm install --registry=https://registry.npmmirror.com
+
+      - name: Package
+        run: npm run ${{ matrix.script }}
+        env:
+          # 无签名包：阻止 electron-builder 自动找钥匙串/证书
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Collect artifacts
+        shell: bash
+        run: |
+          mkdir -p out
+          find release -maxdepth 1 -type f \( -name '*.dmg' -o -name '*.zip' -o -name '*.exe' -o -name '*.AppImage' \) -exec cp {} out/ \;
+          ls -la out
+          test -n "$(ls -A out)" || { echo "release/ 下没有可收集的安装包"; exit 1; }
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.label }}-${{ github.ref_name }}
+          path: out/*
+          if-no-files-found: error
