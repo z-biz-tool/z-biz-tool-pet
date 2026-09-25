@@ -24,7 +24,7 @@
     "assistant"
   ],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "build": {
     "appId": "com.zbiztool.zbot",
     "productName": "Z-Bot",
