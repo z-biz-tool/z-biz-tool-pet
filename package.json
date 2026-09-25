@@ -1,6 +1,6 @@
 {
   "name": "z-bot",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "桌面萌宠应用 - 支持语音对话的 AI 助手",
   "main": "dist/main/index.js",
   "scripts": {
