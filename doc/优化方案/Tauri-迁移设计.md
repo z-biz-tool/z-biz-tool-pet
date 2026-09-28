@@ -3,14 +3,29 @@
 > 起因：`pet 改为 rust 壳子，体积太大`（09-24 用户原话）。
 > `cap-img` 已落地在 `z-biz-tool-capability`（`v0.1.1`，CI 全绿），本设计说明 pet 接入它的姿势。
 
+## 0. 进度核对（本文其余部分是设计稿，不是已完成事实）
+
+按 2026-09-28 的仓库实测：
+
+| 问题 | 结论 |
+|---|---|
+| 迁移了多少？ | **0**。没有 `src-tauri/` 目录，仓库里没有任何 `.rs` 文件，`package.json` 无 tauri 相关依赖与脚本 |
+| CI 跑什么？ | `.github/workflows/` 只有 `ci.yml` + `build.yml`，两条都是 electron-builder，没有 tauri-action，也没有文中设想的 `legacy.yml` 双轨 |
+| 运行时 | Electron **41.2.1**（`package.json` `electron ^41.2.1`），不是本文旧版写的 Electron 27 |
+| 主进程规模 | `src/main/` 共 **22 个** TS 文件（旧版写 14 个）；`index.ts` 已拆到 274 行，`ipc-handlers.ts` 691 行 |
+| 包体积 | 本机没有 `release/` 产物可测，"~105 MB" 是估测，未复核 |
+
+旧版本节里引用的 `src/renderer/pet/ScreenshotPanel.tsx` **不存在**（下一节已改成真实落点）。
+下文所有 P1–P5 均为**未开工**计划；读的时候把它们当待办，不当状态。
+
 ## 1. 现状盘点（实测）
 
 | 指标 | 值 |
 |---|---|
-| 形态 | Electron 27（`main: dist/main/index.js`，`@electron/...` 工具栈全栈 Node） |
-| 安装包体 | `build/mac-arm64/Z-Bot-1.0.1.dmg` 当前 ~105 MB（含 whisper.cpp 二进制 + Electron runtime） |
-| 主进程模块（src/main/） | 14 个：ai-router、ai-providers、task-system、memory-system、voice-service、ipc-handlers、tray-manager、updater、mcp-tools、meeting-transcriber、scenery-system、shortcut-manager、quick-commands、particle-system |
-| 渲染层 | React 19 + antd + zustand + 共享 `z-biz-tool-shared` |
+| 形态 | Electron **41.2.1**（`main: dist/main/index.js`，主进程全栈 Node） |
+| 安装包体 | 本机无 `release/` 产物，**未实测**；~105 MB 是历史估测 |
+| 主进程模块（src/main/） | **22 个**：index、window-manager、ipc-handlers、tray-manager、shortcut-manager、stores、config-store、security、updater、ai-router、ai-providers、mcp-tools、tool-limiter、voice-service、meeting-transcriber、memory-system、task-system、quick-commands、achievement-system、persona-system、scenery-system、particle-system |
+| 渲染层 | React 19 + antd + zustand + 共享 `z-biz-tool-shared`；pet 窗口 1109 行、admin 窗口 1002 行 |
 | 本地服务 | `server/`（express + multer 文件上传 + 自定义 TTS/STT 代理，STT 端口、TTS 端口常量在 `voice-service.ts`） |
 | 体积大头（预估） | Electron runtime ~80MB + 整个 whisper.cpp 二进制 ~25MB（！）+ node_modules 镜像 + 应用本体 |
 
@@ -27,7 +42,10 @@
 
 ## 3. 接入 cap-img
 
-pet 当前**没有任何图片处理**（grep `image\|canvas\|base64` 零命中）。但矩阵规划 03 §6.4 写明：**pix 立项的前置 = 能力层 img 一片 + Asset 版本链**，pet 是 pix 之前的截图/图像类操作候选消费方之一。提前把 cap-img 接进 pet，让 pet 一开始就是"统一从 capability 取像素"的 app，避免未来再发生"file 当年把 base64 自己塞进 image_utils"那种六套重复实现。
+pet 的图片处理目前只有**一条路径**：主进程 `desktopCapturer` 取缩略图 → `NativeImage.toJPEG()` → base64/落盘（`src/main/ipc-handlers.ts`），
+渲染端只消费 base64 dataURL，没有 canvas 编解码（粒子/场景是 CSS+DOM，见 `particle-system.ts`）。
+本节旧版写的"grep image|canvas|base64 零命中"已失效，请以该行代码为准。
+矩阵规划 03 §6.4 写明：**pix 立项的前置 = 能力层 img 一片 + Asset 版本链**，pet 是 pix 之前的截图/图像类操作候选消费方之一。提前把 cap-img 接进 pet，让 pet 一开始就是"统一从 capability 取像素"的 app，避免未来再发生"file 当年把 base64 自己塞进 image_utils"那种六套重复实现。
 
 接入方式：
 
@@ -43,7 +61,7 @@ cap-img = { git = "https://github.com/z-biz-tool/z-biz-tool-capability", tag = "
 | 阶段 | 用 cap-img 替的 pet 现状 | 文件/位置 |
 |---|---|---|
 | P1 壳 | （仅验证依赖通：注册 `cap_demo` 命令调 `cap_img::info`） | pet/src-tauri/src/commands/demo.rs |
-| P2 截图 | pet 截图当前用 `desktopCapturer` 拉 webview + html-to-image 转 base64 → 用户保存；改成 `cap_img::thumbnail`（PNG 内存编码 + base64）+ `cap_img::save_bytes` 落盘 | src/renderer/pet/ScreenshotPanel.tsx → 后端命令 |
+| P2 截图 | pet 截图当前由主进程 `desktopCapturer` 拉缩略图 → `toJPEG(80)` → 落 temp + base64；改成 `cap_img::thumbnail`（PNG 内存编码 + base64）+ `cap_img::save_bytes` 落盘 | `src/main/ipc-handlers.ts` 的 `screenshot:capture / captureWindow / captureAndAnalyze` + `src/renderer/pet/App.tsx` 的 `captureAndAnalyzeScreen`（注意：`ScreenshotPanel.tsx` 这个文件不存在） |
 | P3 图像导入 | 用户拖入图片做头像/表情包；将来 cap-img 提供缩放/裁剪/EXIF | 头像是 `App.tsx`，新命令 `resize_avatar` |
 | 后续 | 截图打码 / 水印 / 多尺寸导出 / 抠图 | 逐步把 renderer canvas 路径替成 cap-img |
 
@@ -92,7 +110,7 @@ P1→P3 是"打包体积换开发量"性价比最高的一段（改 ipc-handlers
 
 - **不要在 Tauri 主进程留 Node spawn**：voice-service 不许 fallback 到 `Command::new("node", "server/index.js")`——一旦这样 P4 等于白做。whisper-rs 必须用 Rust API。
 - **不要把 pet 的 ipc-handlers 500 行胶水代码原样搬 Rust**：重构机会，借机拆分成多个子命令、减少单文件体积。
-- **renderer 几乎不动**：React 19 + antd + zustand + z-biz-tool-shared 已经全部在 src/renderer/pet/，迁 Tauri 后**不需要改 renderer 一行**，只是 `main` 从 vite dev 服务器的 URL 改成 `tauri://localhost`，前端已经过 132 测试的验证。
+- **renderer 几乎不动**：React 19 + antd + zustand + z-biz-tool-shared 已经全部在 src/renderer/pet/，迁 Tauri 后**不需要改 renderer 一行**，只是 `main` 从 vite dev 服务器的 URL 改成 `tauri://localhost`。（注意：`vitest run` 实测 **132 用例全绿**，但 14 个测试文件全部测主进程/`server/`，**渲染层零覆盖**——"renderer 不用改"这句目前只是推断，没有测试兜底。）
 - **AI 路由保持 web 端**：AI 调用是网络 IO，没有"必须本地 Rust"的理由，留在 webview 用 fetch 跑，对打包体积零影响。
 
 ## 8. 与矩阵规划其它 GAP 的关系
@@ -103,4 +121,5 @@ P1→P3 是"打包体积换开发量"性价比最高的一段（改 ipc-handlers
 
 ## 9. 落地决策
 
-不在本 goal 内启动 src-tauri 实写（Node 14 个模块 → Rust 的工作量远超剩余 turn）。本设计文档作为下一轮 goal 的入口文件：确认 P1 范围后，下一轮开干 P1 = 壳 + cap-img 验证 + 不动 renderer + CI 双轨。
+不在本 goal 内启动 src-tauri 实写（Node 侧 22 个主进程模块 → Rust 的工作量远超剩余 turn）。本设计文档作为下一轮 goal 的入口文件：确认 P1 范围后，下一轮开干 P1 = 壳 + cap-img 验证 + 不动 renderer + CI 双轨。
+截至本文核对时（见 §0），以上一步都没有落地。

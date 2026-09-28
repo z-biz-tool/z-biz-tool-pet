@@ -222,6 +222,12 @@ function App() {
   useEffect(() => {
     log('[Pet] 组件初始化');
 
+    // preload 注入失败时宠物仍要能动，但必须让用户知道为什么点什么都没反应
+    if (!window.electronAPI) {
+      console.error('[Pet] electronAPI 缺失：预加载脚本未注入，宠物进入只读降级模式');
+      setHint('主进程通道异常 · 仅本地动画');
+    }
+
     // 加载配置
     window.electronAPI?.loadConfig().then((cfg) => {
       if (cfg) {
@@ -246,7 +252,17 @@ function App() {
           }
         }
       }
+    }).catch((e: any) => {
+      // 读配置失败只降级到默认值，宠物必须照常可见可点
+      log('[Pet] 配置读取失败，改用默认设置: ' + (e?.message || e));
+      setHint('配置读取失败 · 已用默认设置');
+      setTimeout(() => setHint(''), 4000);
     });
+
+    if (!window.electronAPI) {
+      log('[Pet] electronAPI 未注入，preload 可能加载失败');
+      setHint('主进程通道不可用 · 仅本地动画');
+    }
 
     const unsubStart = window.electronAPI?.onVoiceStart(() => startRecording());
     const unsubStop = window.electronAPI?.onVoiceStop(() => stopRecording());

@@ -1,4 +1,4 @@
-import { app,desktopCapturer,ipcMain,session,systemPreferences } from 'electron';
+import { app,clipboard,desktopCapturer,ipcMain,Notification,session,systemPreferences } from 'electron';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
@@ -358,21 +358,47 @@ export function installCSP() {
 }
 
 // ---------- IPC: 快捷键事件 ----------
-ipcMain.on('shortcut:screenshot', () => {
-  sendToWindows('shortcut:screenshot');
-});
+// 原先这里有 4 个 ipcMain.on('shortcut:*') 转发，但 shortcut-manager 是用
+// webContents.send 投递的（渲染端监听），主进程自己收不到，全是死代码。
+// 现在 note / whisperStart 直接在主进程落地，screenshot 仍走渲染端监听。
 
-ipcMain.on('shortcut:note', () => {
-  sendToWindows('shortcut:note');
-});
+/**
+ * 全局快捷键「快速笔记」落地：剪贴板文本 → Pin 便签 + 系统通知。
+ * 通知而非 toast：萌宠窗口可能是唯一可见的界面，管理端往往藏着。
+ */
+export function captureQuickNote(): { success: boolean; error?: string; content?: string } {
+  const text = clipboard.readText().trim();
+  if (!text) {
+    const body = '剪贴板是空的，先复制一段文字再按快捷键';
+    console.warn('[Z-Bot Main] 快速笔记跳过:', body);
+    showNoteNotification('快速笔记未保存', body);
+    return { success: false, error: body };
+  }
+  const content = text.slice(0, 2000);
+  try {
+    const pins = loadPinCards();
+    pins.push({ id: Date.now().toString(), content, createdAt: new Date().toISOString() });
+    savePinCards(pins);
+    sendToWindows('pet:triggerAnimation', 'petted');
+    const preview = content.replace(/\s+/g, ' ').slice(0, 60);
+    showNoteNotification(`已记下笔记（共 ${pins.length} 条）`, preview, '在托盘「快速笔记」里查看');
+    return { success: true, content };
+  } catch (error: any) {
+    console.error('[Z-Bot Main] 快速笔记写入失败:', error.message);
+    showNoteNotification('快速笔记保存失败', error.message);
+    return { success: false, error: error.message };
+  }
+}
 
-ipcMain.on('shortcut:translateWord', () => {
-  sendToWindows('shortcut:translateWord');
-});
-
-ipcMain.on('shortcut:whisperStart', () => {
-  sendToWindows('shortcut:whisperStart');
-});
+function showNoteNotification(title: string, body: string, footnote?: string) {
+  try {
+    if (!Notification.isSupported()) return;
+    new Notification({ title, body, silent: true }).show();
+  } catch (e: any) {
+    console.warn('[Z-Bot Main] 笔记通知弹出失败:', e.message);
+  }
+  if (footnote) console.log('[Z-Bot Main] 快速笔记提示:', footnote);
+}
 
 // ---------- IPC: 按住说话快捷键 ----------
 ipcMain.handle('voice:pushToTalkStatus', async () => isPushToTalkActive());
@@ -497,6 +523,33 @@ ipcMain.handle('pin:remove', async (_, id: string) => {
 ipcMain.handle('pin:list', async () => {
   return loadPinCards();
 });
+
+/** 托盘「快速笔记」子菜单读最近 8 条；坏文件按空处理，不让宠物起不来 */
+export function listRecentQuickNotes(limit = 8): PinCard[] {
+  try {
+    return loadPinCards().slice(-limit).reverse();
+  } catch (e: any) {
+    console.warn('[Z-Bot Main] 读取便签失败:', e.message);
+    return [];
+  }
+}
+
+export function quickNoteCount(): number {
+  return listRecentQuickNotes(1000).length;
+}
+
+export function copyQuickNote(content: string): void {
+  clipboard.writeText(content);
+  console.log('[Z-Bot Main] 已把便签复制回剪贴板');
+}
+
+export function clearQuickNotes(): void {
+  try {
+    savePinCards([]);
+  } catch (e: any) {
+    console.warn('[Z-Bot Main] 清空便签失败:', e.message);
+  }
+}
 
 // ---------- IPC: 会议转录 ----------
 ipcMain.handle('meeting:start', async (_, title: string) => {

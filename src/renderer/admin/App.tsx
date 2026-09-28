@@ -252,21 +252,9 @@ function App() {
       });
     });
 
-    // 监听快捷键事件
+    // 监听快捷键事件（笔记/唤醒/翻译已移除：前两者改为主进程直接落地，翻译取词无跨应用取词能力已下架）
     const unsubShortcutScreenshot = window.electronAPI?.onShortcutScreenshot(() => {
       captureScreenshot();
-    });
-    
-    const unsubShortcutNote = window.electronAPI?.onShortcutNote(() => {
-      message.info('快捷笔记功能（待实现）');
-    });
-    
-    const unsubShortcutTranslate = window.electronAPI?.onShortcutTranslateWord(() => {
-      message.info('翻译取词功能（待实现）');
-    });
-    
-    const unsubShortcutWhisper = window.electronAPI?.onShortcutWhisperStart(() => {
-      message.info('唤醒宠物功能（待实现）');
     });
 
     // 检测 ollama 在线状态
@@ -282,9 +270,6 @@ function App() {
       unsubPushToTalk?.();
       unsubConfirm?.();
       unsubShortcutScreenshot?.();
-      unsubShortcutNote?.();
-      unsubShortcutTranslate?.();
-      unsubShortcutWhisper?.();
       unsubChunk?.();
       clearInterval(onlineTimer);
     };

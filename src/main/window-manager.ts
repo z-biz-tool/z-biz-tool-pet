@@ -55,7 +55,7 @@ export function showAdminWindow(): void {
 
 export function showPetWindow(): void {
   createPetWindow();
-  petWindow?.show();
+  petWindow?.showInactive();
 }
 
 export async function setStealthMode(enabled: boolean): Promise<boolean> {
@@ -67,6 +67,7 @@ export async function setStealthMode(enabled: boolean): Promise<boolean> {
 
 export function stopWindowTimers(): void {
   stopCursorPush();
+  flushPetBounds();
 }
 
 // ---------- 截图隐身模式 ----------
@@ -147,6 +148,20 @@ function saveWindowBounds(bounds: WindowBounds) {
   }
 }
 
+let boundsSaveTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** 立即落盘当前位置：拖拽后 400ms 内退出会丢位置，退出与隐藏路径都要能同步补一次 */
+export function flushPetBounds(): void {
+  if (boundsSaveTimer) {
+    clearTimeout(boundsSaveTimer);
+    boundsSaveTimer = null;
+  }
+  const win = getPetWindow();
+  if (!win) return;
+  const [x, y] = win.getPosition();
+  saveWindowBounds({ x, y });
+}
+
 /** 判断保存的位置是否仍落在某个显示器范围内（拔掉外接屏后不越界恢复） */
 function boundsOnSomeDisplay(x: number, y: number): boolean {
   return screen.getAllDisplays().some((d) => {
@@ -199,7 +214,7 @@ export function createAdminWindow() {
 
 export function createPetWindow() {
   if (petWindow && !petWindow.isDestroyed()) {
-    petWindow.show();
+    petWindow.showInactive();
     return;
   }
   petWindow = new BrowserWindow({
@@ -212,6 +227,10 @@ export function createPetWindow() {
     skipTaskbar: true,
     hasShadow: false,
     show: false,
+    // macOS: 窗口不是 key 时也把首次点击交给页面，宠物不会为了响应点击抢走前台应用的焦点
+    acceptFirstMouse: true,
+    minimizable: false,
+    fullscreenable: false,
     webPreferences: baseWebPreferences(),
   });
 
@@ -220,6 +239,8 @@ export function createPetWindow() {
   // 跨工作区/全屏空间可见（T4.1）
   try {
     petWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    // floating 层：压在普通窗口之上但不进 modal-panel 层，减少对系统对话框的遮挡
+    petWindow.setAlwaysOnTop(true, 'floating');
   } catch (e: any) {
     console.warn('[Z-Bot Main] 设置全工作区可见失败:', e.message);
   }
@@ -233,17 +254,16 @@ export function createPetWindow() {
   if (clickThrough) petWindow.setIgnoreMouseEvents(true, { forward: true });
 
   // 移动结束后再落盘，避免拖拽期间高频写盘
-  let boundsSaveTimer: NodeJS.Timeout | null = null;
   const persistLater = () => {
     if (boundsSaveTimer) clearTimeout(boundsSaveTimer);
     boundsSaveTimer = setTimeout(() => {
-      if (!petWindow || petWindow.isDestroyed()) return;
-      const [x, y] = petWindow.getPosition();
-      saveWindowBounds({ x, y });
+      boundsSaveTimer = null;
+      flushPetBounds();
     }, 400);
   };
   petWindow.on('moved', persistLater);
   petWindow.on('resized', persistLater);
+  petWindow.on('hide', () => persistLater());
 
   if (isDev) {
     console.log('[Z-Bot Main] 加载萌宠 URL...');
@@ -256,7 +276,7 @@ export function createPetWindow() {
   }
 
   petWindow.once('ready-to-show', () => {
-    petWindow?.show();
+    petWindow?.showInactive();
     if (stealthMode) applyStealthMode(petWindow, true);
   });
 
@@ -276,7 +296,7 @@ ipcMain.handle('window:toggle', async (_, mode: 'admin' | 'pet') => {
     petWindow?.hide();
   } else {
     if (!petWindow) createPetWindow();
-    petWindow?.show();
+    petWindow?.showInactive();
     adminWindow?.hide();
   }
 });
@@ -288,7 +308,7 @@ ipcMain.handle('window:show', async (_, mode: 'admin' | 'pet') => {
     adminWindow?.focus();
   } else {
     if (!petWindow) createPetWindow();
-    petWindow?.show();
+    petWindow?.showInactive();
   }
 });
 

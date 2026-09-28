@@ -11,16 +11,16 @@ export type ShortcutKey =
   | 'petShowHide'
   | 'screenshot'
   | 'note'
-  | 'translateWord'
   | 'whisperStart'
   | 'pushToTalkStart'
   | 'pushToTalkStop';
 
+// 翻译取词（原 CommandOrControl+Alt+T）已下架：跨应用取词要系统级选区读取，本仓库没有该能力，
+// 保留绑定只会从其他应用手里偷走快捷键却只弹一句"待实现"。
 export const DEFAULT_ACCELERATORS: Record<ShortcutKey, string> = {
   petShowHide: 'CommandOrControl+Shift+Z',
   screenshot: 'CommandOrControl+Alt+S',
   note: 'CommandOrControl+Alt+N',
-  translateWord: 'CommandOrControl+Alt+T',
   whisperStart: 'CommandOrControl+Alt+P',
   pushToTalkStart: 'Alt+Shift+V',
   pushToTalkStop: 'Alt+Shift+C',
@@ -29,9 +29,8 @@ export const DEFAULT_ACCELERATORS: Record<ShortcutKey, string> = {
 export const SHORTCUT_LABELS: Record<ShortcutKey, string> = {
   petShowHide: '显示/隐藏萌宠',
   screenshot: '截图分析',
-  note: '快速笔记',
-  translateWord: '翻译取词',
-  whisperStart: '唤醒宠物',
+  note: '快速笔记（剪贴板存入便签）',
+  whisperStart: '唤醒宠物（开始语音对话）',
   pushToTalkStart: '按住说话 · 开始',
   pushToTalkStop: '按住说话 · 停止',
 };
@@ -41,13 +40,16 @@ export type ShortcutOverrides = Partial<Record<ShortcutKey, string>>;
 export interface ShortcutDeps {
   togglePet: () => void;
   broadcast: (channel: string) => void;
+  /** 快速笔记：把剪贴板文本存成 Pin 便签，返回结果供通知文案使用 */
+  quickNote: () => { success: boolean; error?: string; content?: string };
+  /** 唤醒宠物：显示萌宠并进入语音对话 */
+  wakePet: () => void;
 }
 
 const state: Record<ShortcutKey, boolean> = {
   petShowHide: false,
   screenshot: false,
   note: false,
-  translateWord: false,
   whisperStart: false,
   pushToTalkStart: false,
   pushToTalkStop: false,
@@ -106,9 +108,8 @@ export function registerShortcuts(overrides: ShortcutOverrides = {}): { failed: 
 
   bind('petShowHide', acc.petShowHide, () => deps!.togglePet(), failed);
   bind('screenshot', acc.screenshot, () => deps!.broadcast('shortcut:screenshot'), failed);
-  bind('note', acc.note, () => deps!.broadcast('shortcut:note'), failed);
-  bind('translateWord', acc.translateWord, () => deps!.broadcast('shortcut:translateWord'), failed);
-  bind('whisperStart', acc.whisperStart, () => deps!.broadcast('shortcut:whisperStart'), failed);
+  bind('note', acc.note, () => deps!.quickNote(), failed);
+  bind('whisperStart', acc.whisperStart, () => deps!.wakePet(), failed);
   bind(
     'pushToTalkStart',
     acc.pushToTalkStart,

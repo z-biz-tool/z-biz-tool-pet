@@ -4,6 +4,7 @@ import {
   Tray,
   nativeImage,
   globalShortcut,
+  Notification,
   shell,
 } from 'electron';
 import * as path from 'path';
@@ -21,8 +22,12 @@ import { buildTrayMenu, TrayContext } from './tray-manager';
 import { VoiceService, setVoiceService, getVoiceService, STT_PORT, TTS_PORT } from './voice-service';
 import { initUpdater, checkForUpdates } from './updater';
 import {
+  captureQuickNote,
   cleanupStaleScreenshots,
+  clearQuickNotes,
+  copyQuickNote,
   installPermissionGuard,
+  listRecentQuickNotes,
   refreshAllowedRoots,
   startMemoryExtractTimer,
   installCSP,
@@ -110,11 +115,11 @@ function trayContext(): TrayContext {
     togglePet: () => {
       const pet = getPetWindow();
       if (!pet) createPetWindow();
-      getPetWindow()?.show();
+      getPetWindow()?.showInactive();
     },
     showPet: () => {
       if (!getPetWindow()) createPetWindow();
-      getPetWindow()?.show();
+      getPetWindow()?.showInactive();
     },
     showAdmin: showAdminWindow,
     openSettings: () => {
@@ -135,6 +140,10 @@ function trayContext(): TrayContext {
       setPetClickThrough(enabled);
       refreshTrayMenu();
     },
+    listNotes: () => listRecentQuickNotes(),
+    clearNotes: () => clearQuickNotes(),
+    copyNote: (content) => copyQuickNote(content),
+    refreshMenu: () => refreshTrayMenu(),
     quit: () => {
       (app as any).isQuitting = true;
       app.quit();
@@ -158,7 +167,20 @@ function createTray() {
     'base64'
   );
   const icon = nativeImage.createFromBuffer(iconData, { scaleFactor: 1.0 });
-  tray = new Tray(icon);
+  try {
+    tray = new Tray(icon);
+  } catch (e: any) {
+    // 托盘失败（如 Linux 无 StatusNotifier）不能让宠物消失：降级为纯快捷键模式并告知用户
+    console.error('[Z-Bot Main] 托盘创建失败，已降级为无托盘模式:', e.message);
+    if (Notification.isSupported()) {
+      new Notification({
+        title: '托盘图标不可用',
+        body: `萌宠仍在运行，但托盘菜单暂不可用：${e.message}。可用 CommandOrControl+Shift+Z 显示/隐藏。`,
+        silent: true,
+      }).show();
+    }
+    return;
+  }
   tray.setToolTip('Z-Bot 桌面助手');
   refreshTrayMenu();
 
@@ -216,13 +238,34 @@ app.whenReady().then(() => {
         return;
       }
       if (pet.isVisible()) pet.hide();
-      else pet.show();
+      else pet.showInactive();
     },
     broadcast: (channel) => sendToWindows(channel),
+    quickNote: () => {
+      const result = captureQuickNote();
+      if (result.success) refreshTrayMenu();
+      return result;
+    },
+    wakePet: () => {
+      // 与托盘「开始语音对话」同一条链路，不新造半成品能力
+      if (!getPetWindow()) createPetWindow();
+      getPetWindow()?.showInactive();
+      sendToWindows('voice:start');
+    },
   });
   {
     const { failed } = registerShortcuts(savedConfig.shortcuts || {});
-    if (failed.length) console.warn('[Z-Bot Main] 以下快捷键注册失败（被占用或格式非法）:', failed.join(', '));
+    if (failed.length) {
+      console.warn('[Z-Bot Main] 以下快捷键注册失败（被占用或格式非法）:', failed.join(', '));
+      // 用户按了没反应会以为功能坏了，必须显式告知是哪几个键被占
+      if (Notification.isSupported()) {
+        new Notification({
+          title: '部分全局快捷键未生效',
+          body: `${failed.join('、')} 注册失败，可能被其他应用占用，可在设置 → 快捷键里改键。`,
+          silent: true,
+        }).show();
+      }
+    }
   }
 
   wirePetCursorTracking();

@@ -241,21 +241,10 @@ const api = {
   },
 
   // ---------- 快捷键事件 IPC ----------
+  // 只有截图需要渲染端响应；笔记/唤醒已在主进程落地，原先的 note/translateWord/whisperStart 监听只会弹"待实现"
   onShortcutScreenshot: (callback: () => void) => {
     ipcRenderer.on('shortcut:screenshot', callback);
     return () => ipcRenderer.removeListener('shortcut:screenshot', callback);
-  },
-  onShortcutNote: (callback: () => void) => {
-    ipcRenderer.on('shortcut:note', callback);
-    return () => ipcRenderer.removeListener('shortcut:note', callback);
-  },
-  onShortcutTranslateWord: (callback: () => void) => {
-    ipcRenderer.on('shortcut:translateWord', callback);
-    return () => ipcRenderer.removeListener('shortcut:translateWord', callback);
-  },
-  onShortcutWhisperStart: (callback: () => void) => {
-    ipcRenderer.on('shortcut:whisperStart', callback);
-    return () => ipcRenderer.removeListener('shortcut:whisperStart', callback);
   },
 
   // ---------- 按住说话 IPC ----------
