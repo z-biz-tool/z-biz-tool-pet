@@ -745,7 +745,8 @@ export async function getModels(provider: AIProvider): Promise<string[]> {
         const res = await fetch(`${provider.baseUrl}/api/tags`, { signal: AbortSignal.timeout(5000) });
         if (!res.ok) return provider.models;
         const data: any = await res.json();
-        return (data.models || []).map((m: any) => m.name || m.model);
+        const names = (data.models || []).map((m: any) => m.name || m.model).filter(Boolean);
+        return names.length ? names : provider.models;
       }
       case 'openai':
       case 'deepseek':
@@ -761,7 +762,8 @@ export async function getModels(provider: AIProvider): Promise<string[]> {
         });
         if (!res.ok) return provider.models;
         const data2: any = await res.json();
-        return (data2.data || []).map((m: any) => m.id);
+        const ids = (data2.data || []).map((m: any) => m.id).filter(Boolean);
+        return ids.length ? ids : provider.models;
       }
       case 'claude': {
         // Claude 没有公开的模型列表 API，返回预设
@@ -774,9 +776,10 @@ export async function getModels(provider: AIProvider): Promise<string[]> {
         );
         if (!res.ok) return provider.models;
         const data3: any = await res.json();
-        return (data3.models || [])
+        const names = (data3.models || [])
           .map((m: any) => m.name?.replace('models/', '') || m.name)
-          .filter((n: string) => n.includes('gemini'));
+          .filter((n: string) => n && n.includes('gemini'));
+        return names.length ? names : provider.models;
       }
       default:
         return provider.models;
