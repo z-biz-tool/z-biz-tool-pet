@@ -113,7 +113,7 @@
     "multer": "^2.1.1",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
-    "z-biz-tool-shared": "^0.1.0",
+    "z-biz-tool-shared": "file:../z-biz-tool-shared",
     "zustand": "^5.0.12"
   }
 }

@@ -140,7 +140,25 @@ const webSearchTool: MCPTool = {
     },
     required: ['query'],
   },
-  requiresConfirmation: false,
+  // 2026-10-04 改 false → true。
+  //
+  // 这里存在**两套独立口径**，改一个不改另一个就会出现安全与体验都不对的组合：
+  //   - security.ts 的 ToolRiskLevel（本工具是 SENSITIVE）—— 决定能不能「总是允许」
+  //   - 本字段 requiresConfirmation —— 决定要不要弹确认框
+  // needsConfirmation() 先看 DANGEROUS，再看白名单，最后**落到本字段**。
+  // 也就是说 SENSITIVE + false ⇒ 永远不问用户；而 allowAlwaysOnApproval 对它返回 true，
+  // 于是它连「总是允许」这条补救通道都没有。
+  //
+  // 而 SENSITIVE 的理由就写在 security.ts 的 describeToolCall 里：
+  // 「联网搜索：…（查询内容会发送到外部服务）」。
+  // 同类还改了 read_url / set_reminder / screenshot_analyze / clipboard_read ——
+  // 尤其后两个，security.ts 原文分别是「屏幕内容会发送给所配置的 AI 服务」
+  // 与「剪贴板可能包含密码等敏感信息」，这两条文案此前**永远不会被用户看到**。
+  // 判定口径（tests/ai-router-confirm.test.ts 固化）：
+  //   SAFE      ⇒ false（自动执行）
+  //   SENSITIVE ⇒ true （首次确认 + 可选「总是允许」）
+  //   DANGEROUS ⇒ true （每次必确认，不接受「总是允许」）
+  requiresConfirmation: true,
   execute: async (params) => {
     const q = typeof params?.query === 'string' ? params.query.trim() : '';
     if (!q) return '缺少 query 参数，无法搜索。';
@@ -183,7 +201,9 @@ const readUrlTool: MCPTool = {
     },
     required: ['url'],
   },
-  requiresConfirmation: false,
+  // 同 web_search：SENSITIVE 必须为 true。security.ts 的确认文案原文是
+  // 「访问网址：…（内容会发送到外部服务）」—— 这句话原先永远不会被用户看到，因为本字段是 false 直接放行了。
+  requiresConfirmation: true,
   execute: async (params) => {
     const check = validateFetchUrl(params?.url);
     if (!check.ok) return `读取URL失败: ${check.reason}`;
@@ -270,7 +290,9 @@ const setReminderTool: MCPTool = {
     },
     required: ['message', 'delayMinutes'],
   },
-  requiresConfirmation: false,
+  // 同 web_search：SENSITIVE 必须为 true。security.ts 的确认文案原文是
+  // 「写入本地提醒（改动用户数据）」—— 这句话原先永远不会被用户看到，因为本字段是 false 直接放行了。
+  requiresConfirmation: true,
   execute: async (params) => {
     const { message, delayMinutes } = params;
     const delayMs = Math.max(1, delayMinutes) * 60 * 1000;
@@ -390,7 +412,9 @@ const screenshotAnalyzeTool: MCPTool = {
     },
     required: ['question'],
   },
-  requiresConfirmation: false,
+  // 同 web_search：SENSITIVE 必须为 true。security.ts 的确认文案原文是
+  // 「截取当前屏幕并交给 AI 分析（屏幕内容会发送给所配置的 AI 服务）」—— 这句话原先永远不会被用户看到，因为本字段是 false 直接放行了。
+  requiresConfirmation: true,
   execute: async (params) => {
     // 截图实际在主进程IPC handler中执行
     return `截图分析请求: ${params.question}`;
@@ -404,7 +428,9 @@ const clipboardReadTool: MCPTool = {
     type: 'object',
     properties: {},
   },
-  requiresConfirmation: false,
+  // 同 web_search：SENSITIVE 必须为 true。security.ts 的确认文案原文是
+  // 「读取系统剪贴板内容（剪贴板可能包含密码等敏感信息）」—— 这句话原先永远不会被用户看到，因为本字段是 false 直接放行了。
+  requiresConfirmation: true,
   execute: async () => {
     try {
       const text = clipboard.readText();
