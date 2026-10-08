@@ -28,13 +28,18 @@
   "build": {
     "appId": "com.zbiztool.zbot",
     "productName": "Z-Bot",
+    "electronLanguages": [
+      "zh-CN",
+      "en-US"
+    ],
     "directories": {
       "output": "release"
     },
     "files": [
       "dist/**/*",
-      "node_modules/**/*",
-      "package.json"
+      "package.json",
+      "!**/node_modules/**/*.d.ts",
+      "!**/node_modules/**/*.map"
     ],
     "extraResources": [
       {
@@ -87,32 +92,32 @@
     }
   },
   "devDependencies": {
+    "@ant-design/icons": "^6.3.2",
     "@eslint/js": "^10.0.1",
     "@types/node": "^25.6.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
+    "antd": "^6.5.3",
     "concurrently": "^9.2.1",
+    "cors": "^2.8.6",
     "electron": "^41.2.1",
     "electron-builder": "^26.8.1",
     "eslint": "^10.11.0",
     "eslint-plugin-react-hooks": "^7.1.1",
-    "typescript": "^6.0.3",
-    "typescript-eslint": "^8.70.1",
-    "vite": "^8.0.8",
-    "vitest": "^5.0.1",
-    "wait-on": "^9.0.5"
-  },
-  "dependencies": {
-    "@ant-design/icons": "^6.3.2",
-    "antd": "^6.5.3",
-    "cors": "^2.8.6",
-    "cron-parser": "^4.9.0",
-    "electron-updater": "^6.8.9",
     "express": "^5.2.1",
     "multer": "^2.1.1",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.70.1",
+    "vite": "^8.0.8",
+    "vitest": "^5.0.1",
+    "wait-on": "^9.0.5",
     "zustand": "^5.0.12"
+  },
+  "dependencies": {
+    "cron-parser": "^4.9.0",
+    "electron-updater": "^6.8.9"
   }
 }

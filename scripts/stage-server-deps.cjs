@@ -24,6 +24,7 @@ function depsOf(pkgDir) {
 }
 
 const seen = new Set();
+const missing = [];
 const queue = [...ROOTS];
 while (queue.length) {
   const name = queue.shift();
@@ -31,7 +32,7 @@ while (queue.length) {
   seen.add(name);
   const src = path.join(NM, name);
   if (!fs.existsSync(src)) {
-    console.warn('[stage] 缺失依赖，跳过:', name);
+    missing.push(name);
     continue;
   }
   const dest = path.join(OUT, name);
@@ -39,6 +40,15 @@ while (queue.length) {
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   fs.cpSync(src, dest, { recursive: true });
   for (const d of depsOf(src)) queue.push(d);
+}
+
+// 缺包必须当场失败：以前只 warn 继续，产物里的 server 会在用户机上 require 不到模块，
+// 而 CI 依然全绿。express/cors/multer 现在是 devDependencies（只为 extraResources 服务，
+// 不进 app.asar），用 --omit=dev 装依赖就会走到这个分支。
+if (missing.length) {
+  console.error(`[stage] 缺少 server 依赖 ${missing.length} 个: ${missing.join(', ')}`);
+  console.error('  server 侧包在 devDependencies 里，打 Windows 包请用完整安装（npm install，不要 --omit=dev）。');
+  process.exit(1);
 }
 
 fs.rmSync(path.join(OUT, '.package-lock.json'), { force: true });
