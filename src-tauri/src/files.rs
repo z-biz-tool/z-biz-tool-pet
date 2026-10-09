@@ -19,8 +19,8 @@ fn allowed_roots() -> &'static Mutex<Vec<PathBuf>> {
 /// Electron: refreshAllowedRoots() —— 启动时刷新一次即可，目录不会在运行中凭空出现
 pub fn refresh_allowed_roots(app: &AppHandle) {
     let mut extra: Vec<PathBuf> = vec![store::data_dir().join("meetings")];
-    if let Ok(userData) = app.path().app_data_dir() {
-        extra.push(userData);
+    if let Ok(user_data) = app.path().app_data_dir() {
+        extra.push(user_data);
     }
     let roots = security::build_allowed_roots(&extra);
     if let Ok(mut guard) = allowed_roots().lock() {

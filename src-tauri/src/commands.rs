@@ -163,15 +163,6 @@ pub fn pet_get_stealth_mode() -> bool {
     crate::runtime::is_stealth()
 }
 
-/// Electron: pet:setClickThrough（只有托盘入口）—— 这里补一个命令入口给管理端用，
-/// 否则点击穿透态下宠物收不到任何点击，只能靠托盘关掉。
-#[tauri::command]
-pub fn pet_set_click_through(app: tauri::AppHandle, enabled: bool) -> bool {
-    let applied = crate::actions::set_click_through(&app, enabled);
-    crate::tray::refresh_menu(&app);
-    applied
-}
-
 /// Electron: window:stickToEdge —— 贴到屏幕边缘时让它滑到工作区底部。
 /// Electron 走 setBounds(rect, true) 让系统做动画，Tauri 的位置 API 没有动画开关，
 /// 结果是同一位置、没有滑行动画。

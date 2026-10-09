@@ -4,6 +4,7 @@ mod commands;
 mod files;
 mod limiter;
 mod log;
+mod meeting;
 mod memory;
 mod notify;
 mod router;
@@ -17,6 +18,7 @@ mod state;
 mod store;
 mod tools;
 mod tray;
+mod update;
 mod voice;
 
 use tauri::{Manager, WindowEvent};
@@ -50,7 +52,6 @@ pub fn run() {
             commands::pet_trigger_animation,
             commands::pet_toggle_stealth,
             commands::pet_get_stealth_mode,
-            commands::pet_set_click_through,
             state::config_load,
             state::config_save,
             state::stt_models,
@@ -93,7 +94,14 @@ pub fn run() {
             voice::voice_speak,
             voice::voice_status,
             voice::voice_interrupt,
-            voice::voice_check_microphone
+            voice::voice_check_microphone,
+            update::update_check,
+            update::update_status,
+            update::update_install,
+            meeting::meeting_start,
+            meeting::meeting_end,
+            meeting::meeting_cancel,
+            meeting::meeting_get_state
         ])
         .on_window_event(|window, event| {
             let app = window.app_handle();
@@ -147,6 +155,8 @@ pub fn run() {
                 );
             }
             shortcuts::apply_from_config_with_notice(handle);
+            // 启动 5 秒后自动检查更新（Electron index.ts 的 setTimeout(…, 5000)）
+            update::schedule_startup_check(handle);
             Ok(())
         })
         .run(tauri::generate_context!())

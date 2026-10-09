@@ -165,7 +165,9 @@ pub fn patch(file: &Path, defaults: Value, patch: &Value) -> Result<Value, Strin
     write(file, merged)
 }
 
-/// 丢弃缓存，强制下一次 read 重新读盘（多实例调试用）。
+/// 丢弃缓存，强制下一次 read 重新读盘。生产路径的读写都由 write 同步维护缓存，
+/// 只有测试会绕过 store 直接改数据文件，所以它只存在于 cfg(test)。
+#[cfg(test)]
 pub fn invalidate(file: &Path) {
     caches().lock().expect("store 缓存表被污染").remove(file);
 }

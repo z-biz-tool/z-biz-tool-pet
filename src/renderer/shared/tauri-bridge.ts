@@ -87,6 +87,17 @@ const PORTED: Record<string, { cmd: string; params?: string[] }> = {
   voiceStatus: { cmd: 'voice_status' },
   voiceInterrupt: { cmd: 'voice_interrupt' },
   checkMicrophone: { cmd: 'voice_check_microphone' },
+
+  // 自动更新（P3，Rust 侧 update.rs：查发布源 → 下载到 ~/Downloads → 唤起安装器）
+  updateCheck: { cmd: 'update_check' },
+  updateStatus: { cmd: 'update_status' },
+  updateInstall: { cmd: 'update_install' },
+
+  // 会议转录（P3，Rust 侧 meeting.rs：ffmpeg 抓系统音频 + 增量切块 + 本进程 whisper）
+  meetingStart: { cmd: 'meeting_start', params: ['title'] },
+  meetingEnd: { cmd: 'meeting_end' },
+  meetingCancel: { cmd: 'meeting_cancel' },
+  meetingGetState: { cmd: 'meeting_get_state' },
 };
 
 /** 事件订阅端点：channel 与 Electron 同名，Rust 一 emit 就自动接通 */

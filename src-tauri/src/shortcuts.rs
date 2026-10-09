@@ -8,7 +8,6 @@
 //! 本仓库没有这个能力，留着只会从其他应用手里偷走快捷键却只弹一句"待实现"。
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use serde_json::{json, Value};
@@ -67,16 +66,6 @@ fn set_registered(key: &str, ok: bool) {
     }
 }
 
-static PUSH_TO_TALK: AtomicBool = AtomicBool::new(false);
-
-pub fn is_push_to_talk_active() -> bool {
-    PUSH_TO_TALK.load(Ordering::SeqCst)
-}
-
-pub fn set_push_to_talk_active(v: bool) {
-    PUSH_TO_TALK.store(v, Ordering::SeqCst);
-}
-
 /// 解析 Electron 风格的加速键。
 /// 词表直接复用 global-hotkey 的解析器（`CommandOrControl/CmdOrCtrl/Alt/Shift/Super` +
 /// `A..Z`/`0..9`/`F1..F24`/`Esc`/`Space`/方向键，且要求修饰键在前、只允许一个主键），
@@ -118,14 +107,8 @@ fn dispatch(app: &AppHandle, key: &str) {
             }
         }
         "whisperStart" => actions::wake_pet(app),
-        "pushToTalkStart" => {
-            set_push_to_talk_active(true);
-            actions::broadcast(app, "voice:pushToTalkStart");
-        }
-        "pushToTalkStop" => {
-            set_push_to_talk_active(false);
-            actions::broadcast(app, "voice:pushToTalkStop");
-        }
+        "pushToTalkStart" => actions::broadcast(app, "voice:pushToTalkStart"),
+        "pushToTalkStop" => actions::broadcast(app, "voice:pushToTalkStop"),
         _ => {}
     }
 }
@@ -262,13 +245,6 @@ pub fn pet_toggle_hint(app: &AppHandle) -> String {
         .unwrap_or_else(|| default_accelerator("petShowHide").to_string());
     let _ = app;
     format!(" ({accel})")
-}
-
-pub fn unregister_all(app: &AppHandle) {
-    let _ = app.global_shortcut().unregister_all();
-    for key in KEYS {
-        set_registered(key, false);
-    }
 }
 
 #[cfg(test)]

@@ -146,21 +146,6 @@ fn legacy_plain() -> Option<String> {
         .map(|s| s.to_string())
 }
 
-pub fn drop_key(name: &str) -> Result<bool, String> {
-    let mut map = load_map();
-    let had = map.remove(name).is_some();
-    save_map(&map)?;
-    let legacy = store::data_dir().join(LEGACY_FILE);
-    if had || legacy.exists() {
-        let _ = std::fs::remove_file(&legacy);
-    }
-    Ok(had)
-}
-
-pub fn has(name: &str) -> bool {
-    load_map().contains_key(name) || (name == API_KEY && legacy_plain().is_some())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,23 +172,22 @@ mod tests {
     }
 
     #[test]
-    fn put_get_and_drop() {
+    fn put_and_get() {
         let _g = crate::lock_test_env();
         let dir = isolated("put");
         let _ = std::fs::remove_dir_all(&dir);
         store::invalidate(&secrets_path());
         put(API_KEY, "sk-abcdef").expect("写入应成功");
-        assert!(has(API_KEY));
         assert_eq!(get(API_KEY).unwrap().as_deref(), Some("sk-abcdef"));
         // 落盘文件里不能出现明文
         let raw = std::fs::read_to_string(secrets_path()).unwrap();
         assert!(!raw.contains("sk-abcdef"), "secrets.json 里出现了明文");
         assert!(master_key_path().exists(), "master.key 应自动生成");
         assert_eq!(get("unrelated").unwrap(), None, "别的名字不该读到 API 密钥");
-        assert!(!has("unrelated"));
-        assert!(drop_key(API_KEY).unwrap());
+        // 换名重写不清掉旧值：config:save 每次保存都会覆盖 API_KEY，但历史项要留着
+        put("other", "x").unwrap();
         store::invalidate(&secrets_path());
-        assert_eq!(get(API_KEY).unwrap(), None);
+        assert_eq!(get(API_KEY).unwrap().as_deref(), Some("sk-abcdef"));
         let _ = std::fs::remove_dir_all(&dir);
         std::env::remove_var("ZBOT_DATA_DIR");
     }
