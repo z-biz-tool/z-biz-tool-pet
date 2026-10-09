@@ -17,6 +17,7 @@ mod state;
 mod store;
 mod tools;
 mod tray;
+mod voice;
 
 use tauri::{Manager, WindowEvent};
 
@@ -87,7 +88,12 @@ pub fn run() {
             screenshot::screenshot_capture_and_analyze,
             skins::pet_get_skins,
             skins::pet_apply_skin,
-            skins::pet_apply_skin_theme
+            skins::pet_apply_skin_theme,
+            voice::voice_transcribe,
+            voice::voice_speak,
+            voice::voice_status,
+            voice::voice_interrupt,
+            voice::voice_check_microphone
         ])
         .on_window_event(|window, event| {
             let app = window.app_handle();

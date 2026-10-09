@@ -141,7 +141,8 @@ const MAX_COMMAND_OUTPUT: usize = 1024 * 1024;
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// 带超时的子进程输出。windowsHide 在 Rust 侧对应 CREATE_NO_WINDOW。
-async fn run_captured(program: &str, args: &[&str], timeout: Duration) -> Result<String, String> {
+/// voice.rs 的 whisper/ffmpeg/PowerShell 也走这一个入口（超时与 CREATE_NO_WINDOW 语义一致）
+pub(crate) async fn run_captured(program: &str, args: &[&str], timeout: Duration) -> Result<String, String> {
     let mut cmd = tokio::process::Command::new(program);
     cmd.args(args).stdin(std::process::Stdio::null());
     #[cfg(windows)]

@@ -80,6 +80,13 @@ const PORTED: Record<string, { cmd: string; params?: string[] }> = {
   getSkins: { cmd: 'pet_get_skins' },
   applySkin: { cmd: 'pet_apply_skin', params: ['skinId'] },
   applySkinTheme: { cmd: 'pet_apply_skin_theme', params: ['skinData'] },
+
+  // 语音（P3，Rust 侧 voice.rs：sidecar 去掉了，本进程直接驱动 whisper-cli / PowerShell）
+  voiceTranscribe: { cmd: 'voice_transcribe', params: ['base64Audio'] },
+  voiceSpeak: { cmd: 'voice_speak', params: ['text', 'voice'] },
+  voiceStatus: { cmd: 'voice_status' },
+  voiceInterrupt: { cmd: 'voice_interrupt' },
+  checkMicrophone: { cmd: 'voice_check_microphone' },
 };
 
 /** 事件订阅端点：channel 与 Electron 同名，Rust 一 emit 就自动接通 */

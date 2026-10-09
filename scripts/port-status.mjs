@@ -17,6 +17,28 @@ while ((m = apiRe.exec(preload))) {
   contract.push({ name: m[1], kind: m[3], channel: m[4] });
 }
 
+// 1b) 契约自查：正则抽的契约行可能漏掉调用点（多行箭头体、一个方法订阅多条通道），
+// 漏掉的端点既不会算「已通」也不会算「未移植」—— 台账就会虚报清零。这里暴力扫一遍兜底。
+const lines = preload.split(/\r?\n/);
+const callSites = [];
+lines.forEach((l, i) => {
+  const m = l.match(/ipcRenderer\.(?:invoke|send|on|once)\(\s*'([^']+)'/);
+  if (!m) return;
+  let key = null;
+  for (let j = i; j >= 0; j--) {
+    const k = lines[j].match(/^\s{2}([A-Za-z]\w*)\s*:/);
+    if (k) {
+      key = k[1];
+      break;
+    }
+  }
+  callSites.push({ name: key ?? '(未知归属)', channel: m[1], line: i + 1 });
+});
+// 手写的桥：一个方法吃多条通道（onApplySkin 同时订阅 applySkin + applySkinData 并回查 getSkins）
+const HANDED = new Set(['onApplySkin']);
+const covered = new Set(contract.map((c) => `${c.name}->${c.channel}`));
+const invisible = callSites.filter((s) => !covered.has(`${s.name}->${s.channel}`) && !HANDED.has(s.name));
+
 // 2) 已接：bridge 的 PORTED / EVENTS / 特例
 const bridge = read('src/renderer/shared/tauri-bridge.ts');
 const ported = new Map();
@@ -71,6 +93,14 @@ if (orphanCmds.length) console.log(`⚠ 注册了但源码里找不到实现：$
 // 前端引用判定按名字在垫片源码里找：PORTED 表、EVENTS 表，以及 impl.log 这类特例
 const unused = [...implemented].filter((n) => !new RegExp(`'${n}'`).test(bridge));
 if (unused.length) console.log(`ℹ 已实现但前端还没接上：${unused.join(', ')}`);
+
+if (invisible.length) {
+  console.log(`\n⚠ 契约正则没抓到的调用点 ${invisible.length} 个（不计入总数，需人工确认）：`);
+  for (const s of invisible) {
+    const hooked = ported.has(s.name) || events.has(s.name) || special.has(s.name);
+    console.log(`    ${hooked ? '✓ 已接' : '✗ 未接'} ${s.name} -> ${s.channel} (preload:${s.line})`);
+  }
+}
 
 if (broken.length) {
   console.error('✗ 存在断链：bridge 映射到了未注册的 Tauri 命令');
