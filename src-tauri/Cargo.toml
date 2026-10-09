@@ -25,6 +25,14 @@ data-encoding = "2"
 regex = "1"
 aes-gcm = "0.10.3"
 getrandom = "0.2"
+# AI 通道：与 z-biz-tool-note 对齐（reqwest 0.12 + json/stream + native-tls），
+# 走系统证书库而不是 rustls —— 本机企业代理/抓包证书都装在系统里。
+reqwest = { version = "0.12", features = ["json", "stream"] }
+futures-util = "0.3"
+tokio = { version = "1", features = ["rt", "time", "sync", "macros", "process"] }
+url = "2"
+# 截图落盘：GDI 拿到的是 BGRA，编码走 image 的 jpeg 分支（default-features 关掉，别拖进 PNG/AVIF）
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
 # 与 box/remote/sys 对齐的一族插件：便签复制走 clipboard，托盘动作走 notification
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-notification = "2"
@@ -38,4 +46,7 @@ tauri-plugin-autostart = "2"
 windows = { version = "0.62", features = [
   "Win32_Foundation",
   "Win32_UI_WindowsAndMessaging",
+  "Win32_Graphics_Gdi",
+  # PrintWindow 在 0.62 的元数据归属是 Win32::Storage::Xps，不是 WindowsAndMessaging
+  "Win32_Storage_Xps",
 ] }

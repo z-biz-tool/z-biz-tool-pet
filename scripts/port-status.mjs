@@ -23,7 +23,9 @@ const ported = new Map();
 for (const x of bridge.matchAll(/^\s{2}(\w+):\s*\{\s*cmd:\s*'([^']+)'/gm)) ported.set(x[1], x[2]);
 const events = new Map();
 for (const x of bridge.matchAll(/^\s{2}(\w+):\s*'([^']+)'/gm)) if (!ported.has(x[1])) events.set(x[1], x[2]);
-const special = new Set(['log']);
+// 特例：不是「一个方法 ↔ 一条通道」的映射，而是手写出来的桥（log 无 invoke 对应物、
+// onApplySkin 双通道收敛），只能按名字认账
+const special = new Set(['log', 'onApplySkin']);
 
 // 3) 已实现 / 已注册：Rust 侧（src-tauri/src 下所有模块都要扫，命令不止住在 commands.rs）
 const rustDir = resolve(root, 'src-tauri/src');
@@ -31,7 +33,7 @@ const rustSrc = readdirSync(rustDir)
   .filter((f) => f.endsWith('.rs'))
   .map((f) => readFileSync(resolve(rustDir, f), 'utf8'))
   .join('\n');
-const implemented = new Set([...rustSrc.matchAll(/#\[tauri::command\]\s*\n\s*(?:pub\s+)?fn\s+(\w+)/g)].map((x) => x[1]));
+const implemented = new Set([...rustSrc.matchAll(/#\[tauri::command\]\s*\n\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)/g)].map((x) => x[1]));
 const registered = new Set(
   (rustSrc.match(/generate_handler!\[([\s\S]*?)\]/)?.[1] ?? '')
     .replace(/\/\/.*$/gm, '')

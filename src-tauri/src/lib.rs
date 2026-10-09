@@ -1,20 +1,26 @@
 mod actions;
+mod ai;
 mod commands;
 mod files;
+mod limiter;
 mod log;
+mod memory;
 mod notify;
+mod router;
 mod runtime;
+mod screenshot;
 mod secret;
 mod security;
 mod shortcuts;
+mod skins;
 mod state;
 mod store;
+mod tools;
 mod tray;
 
 use tauri::{Manager, WindowEvent};
 
 const PET: &str = "pet";
-const ADMIN: &str = "admin";
 
 /// 测试里要动 ZBOT_DATA_DIR，而环境变量是进程级的：并发跑测试会互相踩，统一串行化。
 #[cfg(test)]
@@ -65,7 +71,23 @@ pub fn run() {
             shortcuts::shortcuts_list,
             shortcuts::shortcuts_update,
             files::file_read,
-            files::file_read_as_base64
+            files::file_read_as_base64,
+            router::ai_chat,
+            router::ai_stream_chat,
+            router::ai_test_connection,
+            router::ai_get_models,
+            router::ai_get_builtin_providers,
+            router::tools_list,
+            router::tools_confirm,
+            router::tools_cancel,
+            router::tools_always_allowed,
+            router::tools_revoke_always_allowed,
+            screenshot::screenshot_capture,
+            screenshot::screenshot_capture_window,
+            screenshot::screenshot_capture_and_analyze,
+            skins::pet_get_skins,
+            skins::pet_apply_skin,
+            skins::pet_apply_skin_theme
         ])
         .on_window_event(|window, event| {
             let app = window.app_handle();
@@ -93,6 +115,10 @@ pub fn run() {
             let handle = app.handle();
             store::ensure_data_dir().map_err(|e| format!("数据目录不可用: {e}"))?;
             state::init_runtime_state();
+            // 长期记忆是只写存档（AI 请求并不注入它），但文件要和 Electron 时期连续
+            memory::init();
+            // 上一次运行留下的截图会含屏幕内容，24 小时未清理就删（Electron 在启动时做同一件事）
+            screenshot::cleanup_stale_screenshots();
             // 文件白名单要在任何读取命令可用之前建好根（D05）
             files::refresh_allowed_roots(handle);
 

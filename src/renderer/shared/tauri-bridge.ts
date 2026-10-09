@@ -56,12 +56,36 @@ const PORTED: Record<string, { cmd: string; params?: string[] }> = {
   petSleep: { cmd: 'pet_sleep' },
   petMedicine: { cmd: 'pet_medicine' },
   petPet: { cmd: 'pet_pet' },
+
+  // AI 引擎（P3，Rust 侧 ai.rs + router.rs；错误一律 resolve 成文案，不 reject）
+  aiChat: { cmd: 'ai_chat', params: ['request'] },
+  aiStreamChat: { cmd: 'ai_stream_chat', params: ['request'] },
+  aiTestConnection: { cmd: 'ai_test_connection', params: ['providerConfig'] },
+  aiGetModels: { cmd: 'ai_get_models', params: ['providerConfig'] },
+  aiGetBuiltinProviders: { cmd: 'ai_get_builtin_providers' },
+
+  // MCP 工具编排（P3，Rust 侧 tools.rs + limiter.rs + security.rs）
+  toolsList: { cmd: 'tools_list' },
+  toolsConfirm: { cmd: 'tools_confirm', params: ['toolCallId', 'approved', 'alwaysAllow'] },
+  toolsCancel: { cmd: 'tools_cancel', params: ['toolCallId'] },
+  toolsAlwaysAllowed: { cmd: 'tools_always_allowed' },
+  toolsRevokeAlwaysAllowed: { cmd: 'tools_revoke_always_allowed', params: ['name'] },
+
+  // 截图（P3，Rust 侧 screenshot.rs，GDI 直调而非 desktopCapturer）
+  captureScreenshot: { cmd: 'screenshot_capture' },
+  captureWindow: { cmd: 'screenshot_capture_window', params: ['windowName'] },
+  captureAndAnalyze: { cmd: 'screenshot_capture_and_analyze', params: ['question'] },
+
+  // 皮肤（P3，Rust 侧 skins.rs；订阅端 onApplySkin 是手写特例）
+  getSkins: { cmd: 'pet_get_skins' },
+  applySkin: { cmd: 'pet_apply_skin', params: ['skinId'] },
+  applySkinTheme: { cmd: 'pet_apply_skin_theme', params: ['skinData'] },
 };
 
 /** 事件订阅端点：channel 与 Electron 同名，Rust 一 emit 就自动接通 */
 const EVENTS: Record<string, string> = {
   onAiStreamChunk: 'ai:streamChunk',
-  onApplySkin: 'pet:applySkin',
+  // onApplySkin 不在这里：Electron 的 preload 把它做成双通道收敛，见下面的手写特例
   onCursorDelta: 'pet:cursorDelta',
   onMeetingRollingSummary: 'meeting:rollingSummary',
   onMeetingSegment: 'meeting:segment',
@@ -114,6 +138,32 @@ for (const [name, channel] of Object.entries(EVENTS)) {
     };
   };
 }
+
+// 皮肤订阅：Electron 的 preload 把两条通道收敛成同一个回调，渲染层拿到的一直是皮肤对象。
+// pet:applySkin 送的是 skinId 字符串，必须回查 getSkins；pet:applySkinData 直接送对象。
+// 若这里按普通 EVENTS 直传，App.tsx:293 的 `(skin: PetSkin) => ...` 会收到一个字符串。
+type SkinRecord = { id?: string };
+impl.onApplySkin = (cb: (payload?: unknown) => void) => {
+  let cancelled = false;
+  const pending: Array<Promise<UnlistenFn>> = [
+    listen<string>('pet:applySkin', (event) => {
+      const skinId = event.payload;
+      void invoke<SkinRecord[]>('pet_get_skins')
+        .then((skins) => {
+          const skin = skins.find((s) => s.id === skinId);
+          if (skin && !cancelled) cb(skin);
+        })
+        .catch(() => {});
+    }),
+    listen<SkinRecord>('pet:applySkinData', (event) => {
+      if (!cancelled) cb(event.payload);
+    }),
+  ];
+  return () => {
+    cancelled = true;
+    for (const p of pending) void p.then((fn) => fn());
+  };
+};
 
 // 渲染层日志：Electron 走 ipcRenderer.send('log')（发完就返回）。Tauri 没有 send 语义，
 // 这里 invoke 之后忽略回执 —— 打包后的 exe 没有控制台，Rust 侧会把它并进 ~/.z-bot/logs/app.log。
