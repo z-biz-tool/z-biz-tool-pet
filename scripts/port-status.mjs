@@ -1,39 +1,61 @@
 // Electron → Tauri 端点台账（现算，不维护副本）。
 // 三处事实源：preload 暴露面（契约）、tauri-bridge（已接）、src-tauri（已实现且已注册）。
 // 用法：node scripts/port-status.mjs [--strict]   --strict 时未清零返回退出码 1
-import { readdirSync, readFileSync } from 'node:fs';
+//       node scripts/port-status.mjs --snapshot   从现存 preload 导出契约快照（P4 删壳前跑一次）
+//
+// P4 之后 preload 不在了，契约改读 scripts/endpoint-contract.json —— 它是删壳前用同一个解析器
+// 导出的，不是手抄；台账因此还能继续当回归门禁，而不是跟着 Electron 一起消失。
+import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (p) => readFileSync(resolve(root, p), 'utf8');
+const CONTRACT_FILE = 'scripts/endpoint-contract.json';
 
 // 1) 契约：preload 的 api 对象
-const preload = read('src/preload/index.ts');
-const apiRe = /^\s{2}([A-Za-z]\w*)\s*:\s*(?:async\s*)?\(([\s\S]{0,200}?)\)\s*(?::[^=]{0,80})?=>[\s\S]{0,120}?ipcRenderer\.(invoke|send|on|once)\(\s*'([^']+)'/gm;
-const contract = [];
-let m;
-while ((m = apiRe.exec(preload))) {
-  contract.push({ name: m[1], kind: m[3], channel: m[4] });
-}
-
-// 1b) 契约自查：正则抽的契约行可能漏掉调用点（多行箭头体、一个方法订阅多条通道），
-// 漏掉的端点既不会算「已通」也不会算「未移植」—— 台账就会虚报清零。这里暴力扫一遍兜底。
-const lines = preload.split(/\r?\n/);
-const callSites = [];
-lines.forEach((l, i) => {
-  const m = l.match(/ipcRenderer\.(?:invoke|send|on|once)\(\s*'([^']+)'/);
-  if (!m) return;
-  let key = null;
-  for (let j = i; j >= 0; j--) {
-    const k = lines[j].match(/^\s{2}([A-Za-z]\w*)\s*:/);
-    if (k) {
-      key = k[1];
-      break;
-    }
+const preloadPath = 'src/preload/index.ts';
+const hasPreload = existsSync(resolve(root, preloadPath));
+const parse = (preload) => {
+  const apiRe = /^\s{2}([A-Za-z]\w*)\s*:\s*(?:async\s*)?\(([\s\S]{0,200}?)\)\s*(?::[^=]{0,80})?=>[\s\S]{0,120}?ipcRenderer\.(invoke|send|on|once)\(\s*'([^']+)'/gm;
+  const contract = [];
+  let m;
+  while ((m = apiRe.exec(preload))) {
+    contract.push({ name: m[1], kind: m[3], channel: m[4] });
   }
-  callSites.push({ name: key ?? '(未知归属)', channel: m[1], line: i + 1 });
-});
+
+  // 1b) 契约自查：正则抽的契约行可能漏掉调用点（多行箭头体、一个方法订阅多条通道），
+  // 漏掉的端点既不会算「已通」也不会算「未移植」—— 台账就会虚报清零。这里暴力扫一遍兜底。
+  const lines = preload.split(/\r?\n/);
+  const callSites = [];
+  lines.forEach((l, i) => {
+    const m = l.match(/ipcRenderer\.(?:invoke|send|on|once)\(\s*'([^']+)'/);
+    if (!m) return;
+    let key = null;
+    for (let j = i; j >= 0; j--) {
+      const k = lines[j].match(/^\s{2}([A-Za-z]\w*)\s*:/);
+      if (k) {
+        key = k[1];
+        break;
+      }
+    }
+    callSites.push({ name: key ?? '(未知归属)', channel: m[1] });
+  });
+  return { contract, callSites };
+};
+
+let contract;
+let callSites;
+if (hasPreload) {
+  ({ contract, callSites } = parse(read(preloadPath)));
+  if (process.argv.includes('--snapshot')) {
+    writeFileSync(resolve(root, CONTRACT_FILE), JSON.stringify({ contract, callSites }, null, 2) + '\n');
+    console.log(`→ 已导出契约快照 ${CONTRACT_FILE}（端点 ${contract.length}）`);
+    process.exit(0);
+  }
+} else {
+  ({ contract, callSites } = JSON.parse(read(CONTRACT_FILE)));
+}
 // 手写的桥：一个方法吃多条通道（onApplySkin 同时订阅 applySkin + applySkinData 并回查 getSkins）
 const HANDED = new Set(['onApplySkin']);
 const covered = new Set(contract.map((c) => `${c.name}->${c.channel}`));
@@ -98,7 +120,7 @@ if (invisible.length) {
   console.log(`\n⚠ 契约正则没抓到的调用点 ${invisible.length} 个（不计入总数，需人工确认）：`);
   for (const s of invisible) {
     const hooked = ported.has(s.name) || events.has(s.name) || special.has(s.name);
-    console.log(`    ${hooked ? '✓ 已接' : '✗ 未接'} ${s.name} -> ${s.channel} (preload:${s.line})`);
+    console.log(`    ${hooked ? '✓ 已接' : '✗ 未接'} ${s.name} -> ${s.channel}`);
   }
 }
 
@@ -110,4 +132,10 @@ if (process.argv.includes('--strict') && todo.length) {
   console.error(`✗ 仍有 ${todo.length} 个端点未移植`);
   process.exit(1);
 }
-console.log(todo.length ? `→ 剩余 ${todo.length} 个端点排队（P3）` : '✓ 端点全部移植完毕，可以删 preload');
+console.log(
+  todo.length
+    ? `→ 剩余 ${todo.length} 个端点排队（P3）`
+    : hasPreload
+      ? '✓ 端点全部移植完毕，可以删 preload'
+      : '✓ 契约端点全部接通（Electron 壳已删，台账改读快照）'
+);

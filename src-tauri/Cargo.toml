@@ -36,7 +36,7 @@ image = { version = "0.25", default-features = false, features = ["jpeg"] }
 # 与 box/remote/sys 对齐的一族插件：便签复制走 clipboard，托盘动作走 notification
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-notification = "2"
-# 全局快捷键（快捷键必须跨壳保留，见 src/main/shortcut-manager.ts 的教训）
+# 全局快捷键（快捷键必须跨壳保留，见 Electron 版 shortcut-manager 的教训，该文件已随壳删除）
 tauri-plugin-global-shortcut = "2"
 # 开机自启：Electron 的 app.setLoginItemSettings 在 Tauri 侧的对应物
 tauri-plugin-autostart = "2"

@@ -16,8 +16,6 @@ use crate::state;
 use crate::store;
 use crate::tools::run_captured;
 
-const STT_PORT: u16 = 8084;
-const TTS_PORT: u16 = 8086;
 /// Electron 侧 postJson 的默认预算就是 60s（sidecar 内部对子进程不设超时）
 const STT_BUDGET: Duration = Duration::from_secs(60);
 const TTS_BUDGET: Duration = Duration::from_secs(60);
@@ -455,16 +453,40 @@ pub async fn voice_speak(text: String, voice: Option<String>) -> Value {
     }
 }
 
-/// Electron: voice:status —— 没有常驻子进程了，healthy 改成"本机能力是否就绪"，
-/// restarts 恒为 0：字段留着是为了不破坏调用方读到的形状
+/// Electron: voice:status —— 没有常驻子进程了，healthy 改成"本机能力是否就绪"。
+/// 数组与字段名保持不变，但 port 换成 detail：sidecar 不在监听任何端口，
+/// 报一个 8084 只会让人去 curl 一个不存在的服务；detail 直接说缺可执行文件还是缺模型。
 #[tauri::command]
 pub fn voice_status() -> Value {
+    let bin = whisper_bin();
+    let model = whisper_model_path(&state::load_config());
     json!({
         "services": [
-            { "name": "stt", "port": STT_PORT, "healthy": stt_ready(), "restarts": 0 },
-            { "name": "tts", "port": TTS_PORT, "healthy": tts_engine_ready(), "restarts": 0 },
+            {
+                "name": "stt",
+                "healthy": stt_ready(),
+                "restarts": 0,
+                "detail": missing_whisper(&bin, &model)
+                    .unwrap_or_else(|| format!("{} + {}", bin.display(), model.display())),
+            },
+            {
+                "name": "tts",
+                "healthy": tts_engine_ready(),
+                "restarts": 0,
+                "detail": tts_backend(),
+            },
         ]
     })
+}
+
+fn tts_backend() -> &'static str {
+    if cfg!(windows) {
+        "powershell System.Speech"
+    } else if cfg!(target_os = "macos") {
+        "say"
+    } else {
+        "espeak-ng"
+    }
 }
 
 /// Electron: voice:interrupt —— 两个窗口都要收到

@@ -1,0 +1,720 @@
+{
+  "contract": [
+    {
+      "name": "toggleWindow",
+      "kind": "invoke",
+      "channel": "window:toggle"
+    },
+    {
+      "name": "getMode",
+      "kind": "invoke",
+      "channel": "app:getMode"
+    },
+    {
+      "name": "movePetWindow",
+      "kind": "invoke",
+      "channel": "window:movePet"
+    },
+    {
+      "name": "setPetPosition",
+      "kind": "invoke",
+      "channel": "window:setPetPosition"
+    },
+    {
+      "name": "showWindow",
+      "kind": "invoke",
+      "channel": "window:show"
+    },
+    {
+      "name": "hideWindow",
+      "kind": "invoke",
+      "channel": "window:hide"
+    },
+    {
+      "name": "stickToEdge",
+      "kind": "invoke",
+      "channel": "window:stickToEdge"
+    },
+    {
+      "name": "onVoiceStart",
+      "kind": "on",
+      "channel": "voice:start"
+    },
+    {
+      "name": "onVoiceStop",
+      "kind": "on",
+      "channel": "voice:stop"
+    },
+    {
+      "name": "captureScreenshot",
+      "kind": "invoke",
+      "channel": "screenshot:capture"
+    },
+    {
+      "name": "captureWindow",
+      "kind": "invoke",
+      "channel": "screenshot:captureWindow"
+    },
+    {
+      "name": "captureAndAnalyze",
+      "kind": "invoke",
+      "channel": "screenshot:captureAndAnalyze"
+    },
+    {
+      "name": "saveHistory",
+      "kind": "invoke",
+      "channel": "history:save"
+    },
+    {
+      "name": "loadHistory",
+      "kind": "invoke",
+      "channel": "history:load"
+    },
+    {
+      "name": "clearHistory",
+      "kind": "invoke",
+      "channel": "history:clear"
+    },
+    {
+      "name": "saveConfig",
+      "kind": "invoke",
+      "channel": "config:save"
+    },
+    {
+      "name": "loadConfig",
+      "kind": "invoke",
+      "channel": "config:load"
+    },
+    {
+      "name": "getConversationHistory",
+      "kind": "invoke",
+      "channel": "history:load"
+    },
+    {
+      "name": "addMessageToHistory",
+      "kind": "invoke",
+      "channel": "conversation:addMessage"
+    },
+    {
+      "name": "clearConversation",
+      "kind": "invoke",
+      "channel": "history:clear"
+    },
+    {
+      "name": "onCursorDelta",
+      "kind": "on",
+      "channel": "pet:cursorDelta"
+    },
+    {
+      "name": "triggerAnimation",
+      "kind": "invoke",
+      "channel": "pet:triggerAnimation"
+    },
+    {
+      "name": "setPetPositionWithBounds",
+      "kind": "invoke",
+      "channel": "pet:setPosition"
+    },
+    {
+      "name": "onTriggerAnimation",
+      "kind": "on",
+      "channel": "pet:triggerAnimation"
+    },
+    {
+      "name": "getSkins",
+      "kind": "invoke",
+      "channel": "pet:getSkins"
+    },
+    {
+      "name": "applySkin",
+      "kind": "invoke",
+      "channel": "pet:applySkin"
+    },
+    {
+      "name": "applySkinTheme",
+      "kind": "invoke",
+      "channel": "pet:applySkinTheme"
+    },
+    {
+      "name": "onApplySkin",
+      "kind": "on",
+      "channel": "pet:applySkin"
+    },
+    {
+      "name": "toggleStealth",
+      "kind": "invoke",
+      "channel": "pet:toggleStealth"
+    },
+    {
+      "name": "getStealthMode",
+      "kind": "invoke",
+      "channel": "pet:getStealthMode"
+    },
+    {
+      "name": "petGetStats",
+      "kind": "invoke",
+      "channel": "pet:getStats"
+    },
+    {
+      "name": "petFeed",
+      "kind": "invoke",
+      "channel": "pet:feed"
+    },
+    {
+      "name": "petPlay",
+      "kind": "invoke",
+      "channel": "pet:play"
+    },
+    {
+      "name": "petWash",
+      "kind": "invoke",
+      "channel": "pet:wash"
+    },
+    {
+      "name": "petSleep",
+      "kind": "invoke",
+      "channel": "pet:sleep"
+    },
+    {
+      "name": "petMedicine",
+      "kind": "invoke",
+      "channel": "pet:medicine"
+    },
+    {
+      "name": "petPet",
+      "kind": "invoke",
+      "channel": "pet:pet"
+    },
+    {
+      "name": "aiChat",
+      "kind": "invoke",
+      "channel": "ai:chat"
+    },
+    {
+      "name": "aiTestConnection",
+      "kind": "invoke",
+      "channel": "ai:testConnection"
+    },
+    {
+      "name": "aiGetModels",
+      "kind": "invoke",
+      "channel": "ai:getModels"
+    },
+    {
+      "name": "aiStreamChat",
+      "kind": "invoke",
+      "channel": "ai:streamChat"
+    },
+    {
+      "name": "aiGetBuiltinProviders",
+      "kind": "invoke",
+      "channel": "ai:getBuiltinProviders"
+    },
+    {
+      "name": "onAiStreamChunk",
+      "kind": "on",
+      "channel": "ai:streamChunk"
+    },
+    {
+      "name": "toolsList",
+      "kind": "invoke",
+      "channel": "tools:list"
+    },
+    {
+      "name": "toolsConfirm",
+      "kind": "invoke",
+      "channel": "tools:confirm"
+    },
+    {
+      "name": "toolsCancel",
+      "kind": "invoke",
+      "channel": "tools:cancel"
+    },
+    {
+      "name": "toolsAlwaysAllowed",
+      "kind": "invoke",
+      "channel": "tools:alwaysAllowed"
+    },
+    {
+      "name": "toolsRevokeAlwaysAllowed",
+      "kind": "invoke",
+      "channel": "tools:revokeAlwaysAllowed"
+    },
+    {
+      "name": "voiceTranscribe",
+      "kind": "invoke",
+      "channel": "voice:transcribe"
+    },
+    {
+      "name": "voiceSpeak",
+      "kind": "invoke",
+      "channel": "voice:speak"
+    },
+    {
+      "name": "voiceStatus",
+      "kind": "invoke",
+      "channel": "voice:status"
+    },
+    {
+      "name": "checkMicrophone",
+      "kind": "invoke",
+      "channel": "voice:checkMicrophone"
+    },
+    {
+      "name": "shortcutsList",
+      "kind": "invoke",
+      "channel": "shortcuts:list"
+    },
+    {
+      "name": "shortcutsUpdate",
+      "kind": "invoke",
+      "channel": "shortcuts:update"
+    },
+    {
+      "name": "sttModels",
+      "kind": "invoke",
+      "channel": "stt:models"
+    },
+    {
+      "name": "updateCheck",
+      "kind": "invoke",
+      "channel": "update:check"
+    },
+    {
+      "name": "updateStatus",
+      "kind": "invoke",
+      "channel": "update:status"
+    },
+    {
+      "name": "updateInstall",
+      "kind": "invoke",
+      "channel": "update:install"
+    },
+    {
+      "name": "onUpdateStatus",
+      "kind": "on",
+      "channel": "update:status"
+    },
+    {
+      "name": "onTaskAction",
+      "kind": "on",
+      "channel": "task:action"
+    },
+    {
+      "name": "voiceInterrupt",
+      "kind": "invoke",
+      "channel": "voice:interrupt"
+    },
+    {
+      "name": "onVoiceInterrupt",
+      "kind": "on",
+      "channel": "voice:interrupt"
+    },
+    {
+      "name": "onShortcutScreenshot",
+      "kind": "on",
+      "channel": "shortcut:screenshot"
+    },
+    {
+      "name": "onPushToTalkStart",
+      "kind": "on",
+      "channel": "voice:pushToTalkStart"
+    },
+    {
+      "name": "onPushToTalkStop",
+      "kind": "on",
+      "channel": "voice:pushToTalkStop"
+    },
+    {
+      "name": "fileRead",
+      "kind": "invoke",
+      "channel": "file:read"
+    },
+    {
+      "name": "fileReadAsBase64",
+      "kind": "invoke",
+      "channel": "file:readAsBase64"
+    },
+    {
+      "name": "pinCreate",
+      "kind": "invoke",
+      "channel": "pin:create"
+    },
+    {
+      "name": "pinRemove",
+      "kind": "invoke",
+      "channel": "pin:remove"
+    },
+    {
+      "name": "pinList",
+      "kind": "invoke",
+      "channel": "pin:list"
+    },
+    {
+      "name": "meetingStart",
+      "kind": "invoke",
+      "channel": "meeting:start"
+    },
+    {
+      "name": "meetingEnd",
+      "kind": "invoke",
+      "channel": "meeting:end"
+    },
+    {
+      "name": "meetingCancel",
+      "kind": "invoke",
+      "channel": "meeting:cancel"
+    },
+    {
+      "name": "meetingGetState",
+      "kind": "invoke",
+      "channel": "meeting:getState"
+    },
+    {
+      "name": "onMeetingState",
+      "kind": "on",
+      "channel": "meeting:state"
+    },
+    {
+      "name": "onMeetingSegment",
+      "kind": "on",
+      "channel": "meeting:segment"
+    },
+    {
+      "name": "onMeetingRollingSummary",
+      "kind": "on",
+      "channel": "meeting:rollingSummary"
+    },
+    {
+      "name": "log",
+      "kind": "send",
+      "channel": "log"
+    }
+  ],
+  "callSites": [
+    {
+      "name": "toggleWindow",
+      "channel": "window:toggle"
+    },
+    {
+      "name": "getMode",
+      "channel": "app:getMode"
+    },
+    {
+      "name": "movePetWindow",
+      "channel": "window:movePet"
+    },
+    {
+      "name": "setPetPosition",
+      "channel": "window:setPetPosition"
+    },
+    {
+      "name": "showWindow",
+      "channel": "window:show"
+    },
+    {
+      "name": "hideWindow",
+      "channel": "window:hide"
+    },
+    {
+      "name": "stickToEdge",
+      "channel": "window:stickToEdge"
+    },
+    {
+      "name": "onVoiceStart",
+      "channel": "voice:start"
+    },
+    {
+      "name": "onVoiceStop",
+      "channel": "voice:stop"
+    },
+    {
+      "name": "captureScreenshot",
+      "channel": "screenshot:capture"
+    },
+    {
+      "name": "captureWindow",
+      "channel": "screenshot:captureWindow"
+    },
+    {
+      "name": "captureAndAnalyze",
+      "channel": "screenshot:captureAndAnalyze"
+    },
+    {
+      "name": "saveHistory",
+      "channel": "history:save"
+    },
+    {
+      "name": "loadHistory",
+      "channel": "history:load"
+    },
+    {
+      "name": "clearHistory",
+      "channel": "history:clear"
+    },
+    {
+      "name": "saveConfig",
+      "channel": "config:save"
+    },
+    {
+      "name": "loadConfig",
+      "channel": "config:load"
+    },
+    {
+      "name": "getConversationHistory",
+      "channel": "history:load"
+    },
+    {
+      "name": "addMessageToHistory",
+      "channel": "conversation:addMessage"
+    },
+    {
+      "name": "clearConversation",
+      "channel": "history:clear"
+    },
+    {
+      "name": "onCursorDelta",
+      "channel": "pet:cursorDelta"
+    },
+    {
+      "name": "triggerAnimation",
+      "channel": "pet:triggerAnimation"
+    },
+    {
+      "name": "setPetPositionWithBounds",
+      "channel": "pet:setPosition"
+    },
+    {
+      "name": "onTriggerAnimation",
+      "channel": "pet:triggerAnimation"
+    },
+    {
+      "name": "getSkins",
+      "channel": "pet:getSkins"
+    },
+    {
+      "name": "applySkin",
+      "channel": "pet:applySkin"
+    },
+    {
+      "name": "applySkinTheme",
+      "channel": "pet:applySkinTheme"
+    },
+    {
+      "name": "onApplySkin",
+      "channel": "pet:applySkin"
+    },
+    {
+      "name": "onApplySkin",
+      "channel": "pet:getSkins"
+    },
+    {
+      "name": "onApplySkin",
+      "channel": "pet:applySkinData"
+    },
+    {
+      "name": "toggleStealth",
+      "channel": "pet:toggleStealth"
+    },
+    {
+      "name": "getStealthMode",
+      "channel": "pet:getStealthMode"
+    },
+    {
+      "name": "petGetStats",
+      "channel": "pet:getStats"
+    },
+    {
+      "name": "petFeed",
+      "channel": "pet:feed"
+    },
+    {
+      "name": "petPlay",
+      "channel": "pet:play"
+    },
+    {
+      "name": "petWash",
+      "channel": "pet:wash"
+    },
+    {
+      "name": "petSleep",
+      "channel": "pet:sleep"
+    },
+    {
+      "name": "petMedicine",
+      "channel": "pet:medicine"
+    },
+    {
+      "name": "petPet",
+      "channel": "pet:pet"
+    },
+    {
+      "name": "aiChat",
+      "channel": "ai:chat"
+    },
+    {
+      "name": "aiTestConnection",
+      "channel": "ai:testConnection"
+    },
+    {
+      "name": "aiGetModels",
+      "channel": "ai:getModels"
+    },
+    {
+      "name": "aiStreamChat",
+      "channel": "ai:streamChat"
+    },
+    {
+      "name": "aiGetBuiltinProviders",
+      "channel": "ai:getBuiltinProviders"
+    },
+    {
+      "name": "onAiStreamChunk",
+      "channel": "ai:streamChunk"
+    },
+    {
+      "name": "toolsList",
+      "channel": "tools:list"
+    },
+    {
+      "name": "toolsConfirm",
+      "channel": "tools:confirm"
+    },
+    {
+      "name": "toolsCancel",
+      "channel": "tools:cancel"
+    },
+    {
+      "name": "toolsAlwaysAllowed",
+      "channel": "tools:alwaysAllowed"
+    },
+    {
+      "name": "toolsRevokeAlwaysAllowed",
+      "channel": "tools:revokeAlwaysAllowed"
+    },
+    {
+      "name": "onToolsConfirmRequest",
+      "channel": "tools:confirmRequest"
+    },
+    {
+      "name": "voiceTranscribe",
+      "channel": "voice:transcribe"
+    },
+    {
+      "name": "voiceSpeak",
+      "channel": "voice:speak"
+    },
+    {
+      "name": "voiceStatus",
+      "channel": "voice:status"
+    },
+    {
+      "name": "checkMicrophone",
+      "channel": "voice:checkMicrophone"
+    },
+    {
+      "name": "shortcutsList",
+      "channel": "shortcuts:list"
+    },
+    {
+      "name": "shortcutsUpdate",
+      "channel": "shortcuts:update"
+    },
+    {
+      "name": "sttModels",
+      "channel": "stt:models"
+    },
+    {
+      "name": "updateCheck",
+      "channel": "update:check"
+    },
+    {
+      "name": "updateStatus",
+      "channel": "update:status"
+    },
+    {
+      "name": "updateInstall",
+      "channel": "update:install"
+    },
+    {
+      "name": "onUpdateStatus",
+      "channel": "update:status"
+    },
+    {
+      "name": "onTaskAction",
+      "channel": "task:action"
+    },
+    {
+      "name": "voiceInterrupt",
+      "channel": "voice:interrupt"
+    },
+    {
+      "name": "onVoiceInterrupt",
+      "channel": "voice:interrupt"
+    },
+    {
+      "name": "onShortcutScreenshot",
+      "channel": "shortcut:screenshot"
+    },
+    {
+      "name": "onPushToTalkStart",
+      "channel": "voice:pushToTalkStart"
+    },
+    {
+      "name": "onPushToTalkStop",
+      "channel": "voice:pushToTalkStop"
+    },
+    {
+      "name": "fileRead",
+      "channel": "file:read"
+    },
+    {
+      "name": "fileReadAsBase64",
+      "channel": "file:readAsBase64"
+    },
+    {
+      "name": "pinCreate",
+      "channel": "pin:create"
+    },
+    {
+      "name": "pinRemove",
+      "channel": "pin:remove"
+    },
+    {
+      "name": "pinList",
+      "channel": "pin:list"
+    },
+    {
+      "name": "meetingStart",
+      "channel": "meeting:start"
+    },
+    {
+      "name": "meetingEnd",
+      "channel": "meeting:end"
+    },
+    {
+      "name": "meetingCancel",
+      "channel": "meeting:cancel"
+    },
+    {
+      "name": "meetingGetState",
+      "channel": "meeting:getState"
+    },
+    {
+      "name": "onMeetingState",
+      "channel": "meeting:state"
+    },
+    {
+      "name": "onMeetingSegment",
+      "channel": "meeting:segment"
+    },
+    {
+      "name": "onMeetingRollingSummary",
+      "channel": "meeting:rollingSummary"
+    },
+    {
+      "name": "log",
+      "channel": "log"
+    }
+  ]
+}

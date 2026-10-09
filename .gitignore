@@ -23,7 +23,6 @@ pnpm-debug.log*
 .pnpm-store/
 
 # Build
-build/
 dist/
 out/
 release/
@@ -39,16 +38,10 @@ src-tauri/gen/
 
 # Logs
 *.log
-electron.log
 
 # OS temp
 .tmp/
 
-# 语音临时文件（不得入库）
-server/temp_*
-server/*.webm
-server/*.wav
-server/*.mp3
-server/*.aiff
+# 语音引擎构建产物与模型（录音临时文件在 ~/.z-bot/meetings，不在仓库里）
 whisper.cpp/*
 !whisper.cpp/README.md

@@ -656,7 +656,7 @@ mod tests {
 
     #[test]
     fn strip_html_matches_the_electron_output() {
-        // 期望值不是推出来的：用 node 跑 src/main/mcp-tools.ts:86 的原实现逐条对齐
+        // 期望值不是推出来的：迁移当时用 node 跑 Electron 版 mcp-tools.ts:86 的原实现逐条对齐（该文件已随壳删除）
         for (html, want) in [
             (
                 "<div><script>var a=1;</script><style>.a{color:red}</style>你好&nbsp;&amp;再见   <b>粗</b></div>",

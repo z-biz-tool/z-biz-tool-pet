@@ -1,18 +1,16 @@
 /**
  * Electron → Tauri 桥。
  *
- * Z-Bot 的渲染层只认 `window.electronAPI`（96 个方法、67 处引用点）。本文件把它映射到
- * Tauri 的 invoke/listen，让壳可以先跑起来、端点再逐个往 Rust 搬。
+ * Z-Bot 的渲染层只认 `window.electronAPI`（79 个方法、67 处引用点）。本文件把它映射到
+ * Tauri 的 invoke/listen，壳先跑起来、端点再逐个往 Rust 搬。
  *
- * 类型仍然取自 src/preload/index.ts 的 `ElectronApi = typeof api`：垫片少实现一个方法
- * 就编译不过 —— 沿用 04 §T1.10（修复 D25「类型与运行时不一致」）的同一约束。
- * P4 删 preload 时，这个类型必须迁到渲染层自己的类型文件，否则整条编译期保护会静默消失。
+ * 类型面 `ElectronApi` 住在渲染层自己的 api.d.ts 里（P4 删掉 preload 后由它独立承担编译期保护：
+ * 渲染层调一个这里没映射出去的方法照样编译不过）。运行时接通与否由 scripts/port-status.mjs 校验。
  *
  * channel 名与 Electron 时代保持一致：Rust 侧 emit 的字符串就是这里的事件名。
  */
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import type { ElectronApi } from '../../preload/index';
 
 /** 已移植到 Rust 的 invoke 端点：方法名 → 命令名 + 位置参数名（顺序即实参顺序） */
 const PORTED: Record<string, { cmd: string; params?: string[] }> = {
@@ -120,10 +118,10 @@ const EVENTS: Record<string, string> = {
   onVoiceStop: 'voice:stop',
 };
 
-/** 未移植的端点必须显式失败，不能静默返回 undefined —— 否则前端只会看到一个空界面 */
+/** 契约里有、这里没映射出去的方法：宁可显式失败，也不能静默返回 undefined */
 export class NotPortedError extends Error {
   constructor(method: string) {
-    super(`未移植到 Tauri：${method}（P3 端点清单里排队）`);
+    super(`未接通到 Tauri：${method}（PORTED / EVENTS 表里没有这一项）`);
     this.name = 'NotPortedError';
   }
 }

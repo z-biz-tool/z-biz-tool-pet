@@ -1,17 +1,23 @@
 name: CI
 
+# 每次 push / PR 做前端门禁 + Rust 单测。
+# 只有 windows：截图走 Win32 GDI（windows crate），macOS 腿还没有对应实现，
+# 放进矩阵只会得到一个必然失败的 job。
 on:
   push:
     branches: [main, master]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -20,29 +26,41 @@ jobs:
           node-version: '22'
           cache: 'npm'
 
-      # ELECTRON_SKIP_BINARY_DOWNLOAD：CI 上不启动 GUI，无需下载 ~110MB 运行时
+      - uses: dtolnay/rust-toolchain@stable
+
+      # GitHub 新 token 会写坏 dtolnay 生成的 cargo config（2026-10-03 收编进模板）
+      - name: Reset broken cargo config
+        shell: bash
+        run: rm -f "$USERPROFILE/.cargo/config.toml"
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
       - name: Install dependencies
-        env:
-          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
         run: npm ci
 
-      - name: Typecheck (main + preload + renderer)
+      - name: Typecheck (renderer)
         run: npm run typecheck
 
       # 只把 error 作为硬门禁，react-hooks/exhaustive-deps 等 warning 暂不阻断
       - name: Lint
         run: npm run lint
 
-      - name: Unit tests
-        run: npm test
-
-      - name: Build bundle
+      - name: Build frontend
         run: npm run build
 
-      - name: Verify build artifacts
-        shell: bash
-        run: |
-          test -f dist/main/index.js
-          test -f dist/preload/index.js
-          test -f dist/renderer/pet/index.html
-          test -f dist/renderer/admin/index.html
+      # tauri::generate_context! 读 build.frontendDist=../dist/renderer，必须先有 dist/
+      - name: Rust tests
+        working-directory: src-tauri
+        run: cargo test --lib
+
+      # 端点台账：契约快照（scripts/endpoint-contract.json）里每一个都必须接通
+      - name: Port ledger
+        run: npm run port:status

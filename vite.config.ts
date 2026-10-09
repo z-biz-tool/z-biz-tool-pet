@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import path from 'path';
+import { resolve } from 'node:path';
 
 export default defineConfig({
   plugins: [react()],
@@ -11,15 +11,14 @@ export default defineConfig({
     emptyOutDir: true,
     rollupOptions: {
       input: {
-        admin: path.resolve(__dirname, 'src/renderer/admin/index.html'),
-        pet: path.resolve(__dirname, 'src/renderer/pet/index.html'),
+        admin: resolve(import.meta.dirname, 'src/renderer/admin/index.html'),
+        pet: resolve(import.meta.dirname, 'src/renderer/pet/index.html'),
       },
     },
   },
   server: {
+    // tauri.conf.json 的 devUrl 指向这里，两边必须一致
     port: 5173,
-    // 必须显式绑 IPv4：默认只监听 ::1，而 wait-on/Chromium 会先解析到 127.0.0.1，
-    // 导致 npm run dev 的 wait-on 永远等不到，Electron 根本不启动
     host: '127.0.0.1',
     strictPort: true,
   },

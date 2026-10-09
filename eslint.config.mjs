@@ -4,7 +4,7 @@ import reactHooks from 'eslint-plugin-react-hooks';
 
 export default tseslint.config(
   {
-    ignores: ['dist/**', 'node_modules/**', 'release/**', 'server/**', 'scripts/**', 'whisper.cpp/**', 'vitest.config.ts'],
+    ignores: ['dist/**', 'node_modules/**', 'release/**', 'scripts/**', 'whisper.cpp/**', 'vite.config.ts'],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

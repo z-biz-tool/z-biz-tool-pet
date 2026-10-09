@@ -1,7 +1,8 @@
-name: Build & Package
+name: Build & Release
 
-# 打 tag（v*）才出包：electron-builder 三腿 —— mac dmg+zip（arm64/x64，identity: null 不签名）、
-# win nsis+portable（无签名）、linux AppImage。产物只传 Actions artifact，不自动建 Release。
+# 打 tag（v*）出包并建 GitHub Release —— update.rs 查的就是本仓的 Releases，
+# 所以这里必须真的建 Release，只传 Actions artifact 的话客户端永远查不到新版本。
+# 只有 windows 腿：截图是 Win32 GDI 直调，macOS 还没有对应实现。
 on:
   push:
     tags:
@@ -9,24 +10,11 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  package:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            script: build:mac
-            label: macOS
-          - os: windows-latest
-            script: build:win
-            label: Windows
-          - os: ubuntu-latest
-            script: build:linux
-            label: Linux
-    runs-on: ${{ matrix.os }}
+  build:
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -36,26 +24,24 @@ jobs:
           node-version: 22
           cache: npm
 
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # 同 CI：GitHub 新 token 会写坏 dtolnay 生成的 cargo config
+      - name: Reset broken cargo config
+        shell: bash
+        run: rm -f "$USERPROFILE/.cargo/config.toml"
+
       - name: Install npm dependencies
         run: npm install
 
-      - name: Package
-        run: npm run ${{ matrix.script }}
+      - name: Build Tauri app
+        uses: tauri-apps/tauri-action@v0
         env:
-          # 无签名包：阻止 electron-builder 自动找钥匙串/证书
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-
-      - name: Collect artifacts
-        shell: bash
-        run: |
-          mkdir -p out
-          find release -maxdepth 1 -type f \( -name '*.dmg' -o -name '*.zip' -o -name '*.exe' -o -name '*.AppImage' \) -exec cp {} out/ \;
-          ls -la out
-          test -n "$(ls -A out)" || { echo "release/ 下没有可收集的安装包"; exit 1; }
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          name: installer-${{ matrix.label }}-${{ github.ref_name }}
-          path: out/*
-          if-no-files-found: error
+          tagName: ${{ github.ref_name }}
+          releaseName: '${{ github.ref_name }}'
+          releaseBody: 'See the assets below to download this version.'
+          releaseDraft: false
+          prerelease: false

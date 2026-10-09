@@ -3,20 +3,26 @@
 > 起因：`pet 改为 rust 壳子，体积太大`（09-24 用户原话）。
 > `cap-img` 已落地在 `z-biz-tool-capability`（`v0.1.1`，CI 全绿），本设计说明 pet 接入它的姿势。
 
-## 0. 进度核对（本文其余部分是设计稿，不是已完成事实）
+## 0. 进度核对（2026-10-09 更新：迁移已完成，本文其余部分是设计稿）
 
-按 2026-09-28 的仓库实测：
+按当前仓库实测：
 
 | 问题 | 结论 |
 |---|---|
-| 迁移了多少？ | **0**。没有 `src-tauri/` 目录，仓库里没有任何 `.rs` 文件，`package.json` 无 tauri 相关依赖与脚本 |
-| CI 跑什么？ | `.github/workflows/` 只有 `ci.yml` + `build.yml`，两条都是 electron-builder，没有 tauri-action，也没有文中设想的 `legacy.yml` 双轨 |
-| 运行时 | Electron **41.2.1**（`package.json` `electron ^41.2.1`），不是本文旧版写的 Electron 27 |
-| 主进程规模 | `src/main/` 共 **22 个** TS 文件（旧版写 14 个）；`index.ts` 已拆到 274 行，`ipc-handlers.ts` 691 行 |
-| 包体积 | 本机没有 `release/` 产物可测，"~105 MB" 是估测，未复核 |
+| 迁移了多少？ | **全部**。`src-tauri/` 24 个 Rust 模块约 8.3k 行，preload 契约 78 项端点全部接通，`src/main`、`src/preload`、`server/` 已删除 |
+| 壳 | Tauri 2.12。渲染层一行没改：`window.electronAPI` 由 `src/renderer/shared/tauri-bridge.ts` 映射到 invoke/listen，类型面固化在 `src/renderer/api.d.ts` |
+| 回归门禁 | `scripts/port-status.mjs`（契约快照 `scripts/endpoint-contract.json`）+ `cargo test --lib` 88 条，都进了 CI |
+| CI | `ci.yml` 只有 windows 腿（typecheck / eslint / vite build / cargo test / 台账）；`build.yml` 打 tag 用 tauri-action 出包并**真建 GitHub Release** —— `update.rs` 查的就是本仓 Releases |
+| 出包平台 | 只有 Windows：截图/隐身/点击穿透都是 Win32 直调，macOS 腿没有对应实现，放进矩阵只会得到一个必然失败的 job |
 
-旧版本节里引用的 `src/renderer/pet/ScreenshotPanel.tsx` **不存在**（下一节已改成真实落点）。
-下文所有 P1–P5 均为**未开工**计划；读的时候把它们当待办，不当状态。
+设计稿里最终**没有采纳**的三条（当时是推测，落地时各走了别的路）：
+
+- **`cap-img` 依赖没有引入**。截图直接用 `windows` crate 的 `BitBlt`/`PrintWindow` + `image` 的 jpeg 分支，
+  pet 因此是组织里第一个直调 Win32 的产品，也是第一个把截图能力留在自己壳里的产品。
+- **`whisper-rs` 没有链接进 exe**。STT 走 `whisper-cli` 子进程 + wav 文件，不绑定 whisper.cpp 的构建矩阵。
+- **voice server 没有被"用 axum 重写"，而是整个去掉了**。本进程直接 spawn，8084/8086 与一次性 token 都不存在了。
+
+§1 以下保留原文当历史，其中"未开工""迁移了多少 = 0""Electron 41"这类状态描述已全部失效。
 
 ## 1. 现状盘点（实测）
 

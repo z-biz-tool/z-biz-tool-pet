@@ -2,126 +2,42 @@
   "name": "z-bot",
   "version": "1.0.2",
   "description": "桌面萌宠应用 - 支持语音对话的 AI 助手",
-  "main": "dist/main/index.js",
+  "type": "module",
   "scripts": {
-    "dev": "concurrently -k \"npm run dev:vite\" \"npm run dev:electron\"",
-    "dev:vite": "vite",
-    "dev:electron": "wait-on http://127.0.0.1:5173/pet/index.html && tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json && electron .",
-    "build": "tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json && vite build",
-    "build:web": "vite build",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
     "tauri": "tauri",
-    "build:win": "npm run stage:server && npm run build && electron-builder --win --publish never",
-    "build:mac": "npm run stage:server && npm run build && electron-builder --mac --publish never",
-    "build:linux": "npm run stage:server && npm run build && electron-builder --linux --publish never",
-    "stage:server": "node scripts/stage-server-deps.cjs",
-    "typecheck": "tsc -p tsconfig.main.json --noEmit && tsc -p tsconfig.preload.json --noEmit && tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "port:status": "node scripts/port-status.mjs --strict"
   },
   "keywords": [
-    "electron",
+    "tauri",
     "desktop",
+    "desktop-pet",
     "ai",
     "assistant"
   ],
   "author": "",
   "license": "MIT",
-  "build": {
-    "appId": "com.zbiztool.zbot",
-    "productName": "Z-Bot",
-    "electronLanguages": [
-      "zh-CN",
-      "en-US"
-    ],
-    "directories": {
-      "output": "release"
-    },
-    "files": [
-      "dist/**/*",
-      "package.json",
-      "!**/node_modules/**/*.d.ts",
-      "!**/node_modules/**/*.map"
-    ],
-    "extraResources": [
-      {
-        "from": "server",
-        "to": "server",
-        "filter": [
-          "*.js"
-        ]
-      },
-      {
-        "from": "build/server-deps/node_modules",
-        "to": "server/node_modules"
-      }
-    ],
-    "mac": {
-      "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "arm64",
-            "x64"
-          ]
-        },
-        {
-          "target": "zip",
-          "arch": [
-            "arm64",
-            "x64"
-          ]
-        }
-      ],
-      "category": "public.app-category.utilities",
-      "identity": null
-    },
-    "win": {
-      "target": [
-        "nsis",
-        "portable"
-      ]
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true
-    },
-    "linux": {
-      "target": [
-        "AppImage"
-      ],
-      "category": "Utility"
-    }
+  "dependencies": {
+    "@ant-design/icons": "^6.3.2",
+    "@tauri-apps/api": "^2.12.2",
+    "antd": "^6.5.3",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5"
   },
   "devDependencies": {
-    "@ant-design/icons": "^6.3.2",
     "@eslint/js": "^10.0.1",
-    "@tauri-apps/api": "^2.12.2",
     "@tauri-apps/cli": "^2.12.1",
-    "@types/node": "^25.6.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
-    "antd": "^6.5.3",
-    "concurrently": "^9.2.1",
-    "cors": "^2.8.6",
-    "electron": "^41.2.1",
-    "electron-builder": "^26.8.1",
     "eslint": "^10.11.0",
     "eslint-plugin-react-hooks": "^7.1.1",
-    "express": "^5.2.1",
-    "multer": "^2.1.1",
-    "react": "^19.2.5",
-    "react-dom": "^19.2.5",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.70.1",
-    "vite": "^8.0.8",
-    "vitest": "^5.0.1",
-    "wait-on": "^9.0.5",
-    "zustand": "^5.0.12"
-  },
-  "dependencies": {
-    "cron-parser": "^4.9.0",
-    "electron-updater": "^6.8.9"
+    "vite": "^8.0.8"
   }
 }
