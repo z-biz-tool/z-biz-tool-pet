@@ -8,6 +8,8 @@
     "dev:vite": "vite",
     "dev:electron": "wait-on http://127.0.0.1:5173/pet/index.html && tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json && electron .",
     "build": "tsc -p tsconfig.main.json && tsc -p tsconfig.preload.json && vite build",
+    "build:web": "vite build",
+    "tauri": "tauri",
     "build:win": "npm run stage:server && npm run build && electron-builder --win --publish never",
     "build:mac": "npm run stage:server && npm run build && electron-builder --mac --publish never",
     "build:linux": "npm run stage:server && npm run build && electron-builder --linux --publish never",
@@ -94,6 +96,8 @@
   "devDependencies": {
     "@ant-design/icons": "^6.3.2",
     "@eslint/js": "^10.0.1",
+    "@tauri-apps/api": "^2.12.2",
+    "@tauri-apps/cli": "^2.12.1",
     "@types/node": "^25.6.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",

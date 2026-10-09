@@ -1,0 +1,41 @@
+[package]
+name = "z-biz-tool-pet"
+version = "1.0.2"
+description = "桌面萌宠应用 - 支持语音对话的 AI 助手"
+edition = "2021"
+license = "MIT"
+
+[lib]
+name = "z_biz_tool_pet_lib"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 与 z-biz-tool-mind 对齐的一族：数据目录、时间戳、AES-GCM 密钥存储
+dirs = "5"
+chrono = "0.4"
+uuid = { version = "1", features = ["v4"] }
+data-encoding = "2"
+# 高危命令特征匹配（security.ts 的 18 条正则原样搬过来，手写会漏）
+regex = "1"
+aes-gcm = "0.10.3"
+getrandom = "0.2"
+# 与 box/remote/sys 对齐的一族插件：便签复制走 clipboard，托盘动作走 notification
+tauri-plugin-clipboard-manager = "2"
+tauri-plugin-notification = "2"
+# 全局快捷键（快捷键必须跨壳保留，见 src/main/shortcut-manager.ts 的教训）
+tauri-plugin-global-shortcut = "2"
+# 开机自启：Electron 的 app.setLoginItemSettings 在 Tauri 侧的对应物
+tauri-plugin-autostart = "2"
+# 截图隐身（SetWindowDisplayAffinity）与鼠标推送（GetCursorPos）只能直调 Win32；
+# 本仓库是组织里第一个用 windows crate 的产品。版本跟 tauri 2.12 对齐（0.62），
+# 否则 win.hwnd() 返回的 HWND 与本地 HWND 是两个不同类型，得手工转指针。
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_UI_WindowsAndMessaging",
+] }
