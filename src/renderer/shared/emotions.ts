@@ -122,6 +122,21 @@ const EMOTION_KEYWORD_MAP: Record<string, Emotion> = {
   '小声': 'whispering',
 };
 
+/**
+ * 关键词按**长度降序**排。
+ *
+ * ⚠️ 这不是性能优化，是**正确性**：纯文本路径是子串匹配 + 先到先得，
+ * 短的词会**遮住**长的词。
+ * 原实现按 `EMOTION_KEYWORD_MAP` 的插入顺序扫，于是 `'爱'`（loving，1 字）
+ * 排在 `'可爱'`（cute，2 字）前面 —— 结果「好可爱啊」被判成 **loving**，
+ * 而同样的话写成 `[可爱]` 标签却判成 **cute**。
+ * 同一份词表、两条路径、两个答案 —— 界面上的表情于是随机。
+ * 排完序后先试长词，「可爱」赢，「爱」只在自己出现时生效。
+ */
+const EMOTION_KEYWORDS_BY_LENGTH = Object.entries(EMOTION_KEYWORD_MAP).sort(
+  (a, b) => b[0].length - a[0].length
+);
+
 /** 从AI回复文本中提取情绪关键词 */
 export function extractEmotionFromText(text: string): Emotion | null {
   // 先检查 [情绪] 标签格式
@@ -131,8 +146,8 @@ export function extractEmotionFromText(text: string): Emotion | null {
     if (emotion) return emotion;
   }
 
-  // 再检查文本中的关键词
-  for (const [keyword, emotion] of Object.entries(EMOTION_KEYWORD_MAP)) {
+  // 再检查文本中的关键词（长词优先，见 EMOTION_KEYWORDS_BY_LENGTH）
+  for (const [keyword, emotion] of EMOTION_KEYWORDS_BY_LENGTH) {
     if (text.includes(keyword)) return emotion;
   }
 
