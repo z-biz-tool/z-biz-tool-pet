@@ -970,6 +970,6 @@ mod tests {
         };
         let resp = chat(&p, &req).await.expect("真实调用应成功");
         assert!(!resp.content.is_empty(), "返回内容为空");
-        eprintln!("[LIVE] minimax 真实调用成功：{}", &resp.content.chars().take(40).collect::<String>());
+        eprintln!("[LIVE] minimax 真实调用成功：{}", resp.content.chars().take(40).collect::<String>());
     }
 }
