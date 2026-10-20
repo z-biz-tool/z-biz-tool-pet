@@ -120,6 +120,29 @@ fn real_dir(dir: &Path) -> Option<PathBuf> {
     dir.canonicalize().ok()
 }
 
+/// 比较用的解析：优先 canonicalize 整条路径；**路径不存在时改解析父目录**。
+///
+/// 为什么要有第二招：Windows 的临时目录在 CI 上是 8.3 **短路径**形态
+/// （`C:\Users\RUNNER~1\AppData\Local\Temp`），而 `canonicalize` 只会把它
+/// 展开成**长路径**（`C:\Users\runneradmin\AppData\Local\Temp`）。
+/// 要读的文件还不存在 ⇒ 整条 canonicalize 失败 ⇒ 退回词法路径（短形态），
+/// 于是「白名单根目录是长形态、候选路径是短形态」⇒ **合法的路径被白名单拒掉**。
+///
+/// 父目录通常是存在的 ⇒ 把父目录 canonicalize 掉再把文件名接回去，
+/// 短形态就被还原成长形态，两边对得上。
+/// 顺带的好处：父目录里的符号链接也被解掉了，与本文件「软链接逃逸」的口径一致。
+fn real_for_compare(path: &Path) -> PathBuf {
+    if let Some(p) = real_dir(path) {
+        return p;
+    }
+    if let (Some(parent), Some(name)) = (path.parent(), path.file_name()) {
+        if let Some(p) = real_dir(parent) {
+            return p.join(name);
+        }
+    }
+    absolute(path)
+}
+
 /// 绝对化：相对路径按当前工作目录展开（等价 path.resolve），不要求文件存在
 fn absolute(path: &Path) -> PathBuf {
     if path.is_absolute() {
@@ -137,7 +160,7 @@ fn absolute(path: &Path) -> PathBuf {
 /// 2. 去掉 Windows canonicalize 加的 `\\?\` verbatim 前缀（只留盘符形式，UNC 不在这条链路上）；
 /// 3. 分隔符统一成 /，Windows 上再统一大小写（NTFS 路径本就大小写不敏感）。
 fn normalize(path: &Path) -> String {
-    let resolved = real_dir(path).unwrap_or_else(|| absolute(path));
+    let resolved = real_for_compare(path);
     let mut key = resolved.to_string_lossy().replace('\\', "/");
     if let Some(stripped) = key.strip_prefix("//?/") {
         key = stripped.to_string();
@@ -282,6 +305,75 @@ mod tests {
         let upper = temp.to_string_lossy().to_uppercase();
         let roots = build_allowed_roots(&[]);
         assert!(guard_read_path(&format!(r"{}\x.txt", upper), &roots).allowed);
+    }
+
+    /// 回归钉（全平台）：**待读文件还不存在**时，父目录必须被解析。
+    ///
+    /// 2026-10-20 修的真 bug：整条路径 canonicalize 失败（文件不存在）时，
+    /// 旧实现退回词法路径，父目录里的符号链接 / Windows 8.3 短路径没被解开
+    /// ⇒ 白名单根是长形态、候选路径是短形态 ⇒ **合法路径被拒**。
+    ///
+    /// 这条不依赖符号链接、不依赖平台，**任何平台都能跑**
+    /// （Windows CI 也会跑到它 —— pet 的 CI 只跑 Windows，
+    /// 只写 `#[cfg(unix)]` 的版本在 CI 上等于没测）。
+    #[test]
+    fn real_for_compare_resolves_parent_when_target_missing() {
+        let base = std::env::temp_dir().join(format!("z-bot-rfc-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&base).unwrap();
+        let missing = base.join("gone.txt");
+
+        let out = real_for_compare(&missing);
+        let base_real = base.canonicalize().unwrap();
+        assert_eq!(
+            out,
+            base_real.join("gone.txt"),
+            "父目录必须被 canonicalize，文件名原样接回"
+        );
+        // 存在的路径也仍然走 canonicalize 整条
+        let here = base.join("here.txt");
+        std::fs::write(&here, "x").unwrap();
+        assert_eq!(real_for_compare(&here), base_real.join("here.txt"));
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 回归钉：**待读文件还不存在**时，路径也必须能对上白名单。
+    ///
+    /// 2026-10-20 修的真 bug：整条路径 canonicalize 失败（文件不存在）时，
+    /// 旧实现退回词法路径，于是「父目录里的符号链接 / Windows 8.3 短路径」
+    /// 没被解开 ⇒ 白名单根是长形态、候选路径是短形态 ⇒ **合法路径被拒**。
+    /// Windows CI 上两条用例红过（`reads_only_inside_the_whitelist`、
+    /// `read_guard_ignores_case_on_windows`），根因同一个。
+    ///
+    /// 这条用 Unix 符号链接复现同一类问题（父目录形态不一致），
+    /// 这样在**任何平台**都能验证修复，不只靠 Windows CI。
+    #[cfg(unix)]
+    #[test]
+    fn read_guard_resolves_parent_when_target_does_not_exist_yet() {
+        let base = std::env::temp_dir().join(format!("z-bot-guard2-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&base).unwrap();
+        let real = base.join("real");
+        std::fs::create_dir_all(&real).unwrap();
+        // link -> real（与 Windows 上「短路径 vs 长路径」同类的形态不一致）
+        let link = base.join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let roots = build_allowed_roots(&[real.clone()]);
+
+        // 存在的文件：旧实现本来就能过
+        let existing = link.join("here.txt");
+        std::fs::write(&existing, "hi").unwrap();
+        assert!(
+            guard_read_path(existing.to_str().unwrap(), &roots).allowed,
+            "存在的文件应放行"
+        );
+
+        // **不存在的**文件：整条 canonicalize 失败 ⇒ 旧实现在这里误拒
+        let missing = link.join("gone.txt");
+        let g = guard_read_path(missing.to_str().unwrap(), &roots);
+        assert!(g.allowed, "白名单内、只是文件还不该存在，不该被拒：{:?}", g.reason);
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

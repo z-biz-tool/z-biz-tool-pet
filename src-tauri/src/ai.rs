@@ -94,6 +94,11 @@ pub fn builtin_providers() -> Vec<Provider> {
         provider("qwen", "通义千问", "qwen", "https://dashscope.aliyuncs.com/compatible-mode", "", &["qwen-plus", "qwen-turbo", "qwen-vl-plus"], true),
         provider("claude", "Claude", "claude", "https://api.anthropic.com", "", &["claude-sonnet-4-20250514", "claude-3-5-haiku-20241022"], true),
         provider("gemini", "Gemini", "gemini", "https://generativelanguage.googleapis.com", "", &["gemini-2.0-flash", "gemini-1.5-pro"], true),
+        // MiniMax 开放平台（2026-10-20 加）。OpenAI 兼容协议，
+        // base_url **不带 /v1** —— 本仓拼的是 `{base_url}/v1/chat/completions`
+        // 与 `{base_url}/v1/models`，带了 /v1 会拼出 /v1/v1/...。
+        // 模型清单取自 2026-10-20 实测 `GET https://api.minimaxi.com/v1/models` 返回的 9 个。
+        provider("minimax", "MiniMax", "minimax", "https://api.minimaxi.com", "", &["MiniMax-M3.1-Flash", "MiniMax-M3", "MiniMax-M2.7"], true),
     ]
 }
 
@@ -157,12 +162,16 @@ pub fn resolve_model(request_model: &str, cfg: &Value, provider: &Provider) -> S
 const ANTHROPIC_VERSION: &str = "2023-06-01";
 
 fn is_openai_compatible(ptype: &str) -> bool {
-    matches!(ptype, "openai" | "deepseek" | "qwen" | "custom")
+    // minimax（2026-10-20 加）：MiniMax 开放平台是 **OpenAI 兼容**协议
+    // （实测 https://api.minimaxi.com/v1/chat/completions 返回 200），
+    // 与 deepseek / qwen 同族 ⇒ 走同一条 OpenAI 兼容路径。
+    matches!(ptype, "openai" | "deepseek" | "qwen" | "custom" | "minimax")
 }
 
 /// 流式路径下 claude/gemini 不收 tool_use（Electron 也没收），所以带工具的回合不能流式
 pub fn can_stream_tools(ptype: &str) -> bool {
-    matches!(ptype, "ollama" | "openai" | "deepseek" | "qwen" | "custom")
+    // minimax 同 deepseek / qwen：OpenAI 兼容 ⇒ 支持流式与 tools
+    matches!(ptype, "ollama" | "openai" | "deepseek" | "qwen" | "custom" | "minimax")
 }
 
 fn client(total: Option<Duration>) -> reqwest::Client {
@@ -885,4 +894,82 @@ fn names_from(data: &Value, key: &str, name_keys: &[&str], prefix: Option<&str>)
         out.retain(|n| n.contains("gemini"));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---------------------------------------------------------- MiniMax 接入
+    //
+    // 2026-10-20 新增 MiniMax 模板。钉三件事：
+    //   ① 模板表里确实有 minimax，且 base_url **不带 /v1**
+    //      （本仓拼的是 `{base_url}/v1/chat/completions`，带了 /v1 会拼成 /v1/v1/...）；
+    //   ② 它落在 OpenAI 兼容分支（is_openai_compatible / can_stream_tools）；
+    //   ③ **真实 API 实测**（需 MINIMAX_API_KEY）：打真的 MiniMax 端点能不能跑通。
+    //
+    // 第 ③ 条没设 key 时**显式跳过并打印原因**，不静默通过。
+
+    #[test]
+    fn builtin_providers_include_minimax() {
+        let p = builtin_providers()
+            .into_iter()
+            .find(|p| p.id == "minimax")
+            .expect("内置模板表里必须有 minimax");
+        assert_eq!(p.name, "MiniMax");
+        assert_eq!(p.base_url, "https://api.minimaxi.com");
+        // base_url 不带 /v1 —— 拼接时自己加
+        assert!(
+            !p.base_url.ends_with("/v1"),
+            "base_url 不该带 /v1：本仓拼的是 {{base_url}}/v1/chat/completions"
+        );
+        assert!(p.supports_vision, "M3.1-Flash 支持多模态输入");
+        assert!(!p.models.is_empty(), "模型清单不能为空");
+    }
+
+    #[test]
+    fn minimax_is_openai_compatible_and_supports_stream_tools() {
+        assert!(is_openai_compatible("minimax"));
+        assert!(can_stream_tools("minimax"));
+    }
+
+    /// 真实 API 实测。没设 MINIMAX_API_KEY 就跳过（并打印），
+    /// 不静默通过 —— 「跳过了」和「跑过了」在报告里必须长得不一样。
+    #[tokio::test]
+    async fn minimax_live_chat() {
+        let Ok(key) = std::env::var("MINIMAX_API_KEY") else {
+            eprintln!(
+                "[LIVE] 跳过 minimax 真实 API 实测：未设置 MINIMAX_API_KEY（这是「没跑」，不是「跑过了」）"
+            );
+            return;
+        };
+        let base = std::env::var("MINIMAX_BASE_URL")
+            .unwrap_or_else(|_| "https://api.minimaxi.com".to_string());
+        let model = std::env::var("MINIMAX_MODEL")
+            .unwrap_or_else(|_| "MiniMax-M3.1-Flash".to_string());
+        let p = Provider {
+            id: "minimax".into(),
+            name: "MiniMax".into(),
+            ptype: "minimax".into(),
+            base_url: base,
+            api_key: key,
+            models: vec![model.clone()],
+            supports_vision: true,
+            supports_streaming: true,
+            supports_tools: true,
+        };
+        let req = ChatRequest {
+            messages: vec![Message {
+                role: "user".into(),
+                content: "只回两个字：收到".into(),
+                images: None,
+            }],
+            model: model.clone(),
+            stream: Some(false),
+            tools: None,
+        };
+        let resp = chat(&p, &req).await.expect("真实调用应成功");
+        assert!(!resp.content.is_empty(), "返回内容为空");
+        eprintln!("[LIVE] minimax 真实调用成功：{}", &resp.content.chars().take(40).collect::<String>());
+    }
 }
