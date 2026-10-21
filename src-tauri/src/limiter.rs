@@ -54,7 +54,7 @@ pub fn acquire(name: &str) -> Decision {
             return Decision::Blocked(format!(
                 "工具 {name} 连续失败 {} 次，已熔断，{}s 后可重试",
                 s.consecutive_failures,
-                (left + 999) / 1000
+                left.div_ceil(1000)
             ));
         }
         // 半开：冷却到期就整体复位，让下一次调用去试探
@@ -128,11 +128,18 @@ mod tests {
     fn window_blocks_at_the_twelfth_call() {
         reset(Some("t-window"));
         for i in 0..MAX_CALLS_PER_WINDOW {
-            assert!(matches!(acquire("t-window"), Decision::Allowed(_)), "第 {} 次应放行", i + 1);
+            assert!(
+                matches!(acquire("t-window"), Decision::Allowed(_)),
+                "第 {} 次应放行",
+                i + 1
+            );
         }
         match acquire("t-window") {
             Decision::Blocked(reason) => {
-                assert!(reason.contains("超出频率限制"), "文案要能给模型看懂: {reason}");
+                assert!(
+                    reason.contains("超出频率限制"),
+                    "文案要能给模型看懂: {reason}"
+                );
                 assert!(reason.contains("60s"));
             }
             Decision::Allowed(_) => panic!("第 13 次必须被限流"),

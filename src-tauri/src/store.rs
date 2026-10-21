@@ -96,7 +96,11 @@ fn merge_defaults(stored: Value, defaults: &Value) -> Value {
 
 fn backup_corrupt(file: &Path) {
     if file.exists() {
-        let dest = format!("{}.corrupt.{}", file.display(), chrono::Utc::now().timestamp_millis());
+        let dest = format!(
+            "{}.corrupt.{}",
+            file.display(),
+            chrono::Utc::now().timestamp_millis()
+        );
         let _ = std::fs::copy(file, Path::new(&dest));
     }
 }
@@ -179,7 +183,8 @@ mod tests {
 
     // 环境变量是进程级的，并发测试会互踩，统一串行化。
     fn isolated(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("z-bot-store-{}-{}", tag, uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("z-bot-store-{}-{}", tag, uuid::Uuid::new_v4()));
         std::env::set_var("ZBOT_DATA_DIR", &dir);
         dir
     }
@@ -269,7 +274,10 @@ mod tests {
         assert_eq!(got["petName"], json!("b"));
         assert_eq!(got["themeColor"], json!("#722ed1"));
         assert_eq!(got["voiceSpeed"], json!(1.0));
-        assert!(patch(&f, cfg_defaults(), &json!([])).is_err(), "数组不能 patch");
+        assert!(
+            patch(&f, cfg_defaults(), &json!([])).is_err(),
+            "数组不能 patch"
+        );
         let _ = std::fs::remove_dir_all(&dir);
         std::env::remove_var("ZBOT_DATA_DIR");
     }

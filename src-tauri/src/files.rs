@@ -3,7 +3,7 @@
 //! 渲染进程给的是任意字符串，命令又是 AI 工具链的一部分，所以路径必须先绝对化、解符号链接，
 //! 再判断是否落在白名单目录内；上限两道（10 MB 读盘、5 万字符正文）防止一次读取把窗口卡死。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
 use serde_json::{json, Value};
@@ -44,9 +44,8 @@ fn read_guard(file: &str) -> Result<PathBuf, String> {
 }
 
 fn size_check(path: &PathBuf) -> Result<u64, Value> {
-    let meta = std::fs::metadata(path).map_err(|_| {
-        json!({ "success": false, "error": "文件不存在" })
-    })?;
+    let meta =
+        std::fs::metadata(path).map_err(|_| json!({ "success": false, "error": "文件不存在" }))?;
     if !meta.is_file() {
         return Err(json!({ "success": false, "error": "目标不是文件" }));
     }
@@ -59,7 +58,7 @@ fn size_check(path: &PathBuf) -> Result<u64, Value> {
     Ok(meta.len())
 }
 
-fn mime_of(path: &PathBuf) -> &'static str {
+fn mime_of(path: &Path) -> &'static str {
     let ext = path
         .extension()
         .map(|e| e.to_string_lossy().to_ascii_lowercase())
@@ -133,7 +132,7 @@ mod tests {
         std::fs::create_dir_all(&base).unwrap();
         let inside = base.join("note.txt");
         std::fs::write(&inside, "你好，Z-Bot").unwrap();
-        set_roots(&[base.clone()]);
+        set_roots(std::slice::from_ref(&base));
 
         let ok = file_read(inside.to_string_lossy().to_string());
         assert_eq!(ok["success"], json!(true), "{ok}");
@@ -159,12 +158,15 @@ mod tests {
         let png = base.join("pixel.PNG");
         // 1x1 透明 PNG 的头几个字节足够验证 MIME 是按扩展名判的
         std::fs::write(&png, [0x89u8, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]).unwrap();
-        set_roots(&[base.clone()]);
+        set_roots(std::slice::from_ref(&base));
 
         let r = file_read_as_base64(png.to_string_lossy().to_string());
         assert_eq!(r["success"], json!(true), "{r}");
         assert_eq!(r["mimeType"], json!("image/png"), "扩展名大写也要认");
-        assert!(r["dataUrl"].as_str().unwrap().starts_with("data:image/png;base64,"));
+        assert!(r["dataUrl"]
+            .as_str()
+            .unwrap()
+            .starts_with("data:image/png;base64,"));
         assert_eq!(r["base64"], json!("iVBORw0KGgo="));
         let _ = std::fs::remove_dir_all(&base);
         set_roots(&[]);

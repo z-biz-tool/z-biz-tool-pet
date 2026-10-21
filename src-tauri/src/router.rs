@@ -35,7 +35,11 @@ fn always_allowed() -> &'static Mutex<Vec<String>> {
 }
 
 fn is_always_allowed(name: &str) -> bool {
-    always_allowed().lock().expect("白名单被污染").iter().any(|n| n == name)
+    always_allowed()
+        .lock()
+        .expect("白名单被污染")
+        .iter()
+        .any(|n| n == name)
 }
 
 fn add_always_allowed(name: &str) {
@@ -58,7 +62,8 @@ fn list_always_allowed() -> Vec<String> {
 type Decision = (bool, bool); // (approved, alwaysAllow)
 
 fn pending() -> &'static Mutex<std::collections::HashMap<String, oneshot::Sender<Decision>>> {
-    static P: OnceLock<Mutex<std::collections::HashMap<String, oneshot::Sender<Decision>>>> = OnceLock::new();
+    static P: OnceLock<Mutex<std::collections::HashMap<String, oneshot::Sender<Decision>>>> =
+        OnceLock::new();
     P.get_or_init(Default::default)
 }
 
@@ -120,7 +125,11 @@ pub fn normalize_tool_call(raw: &Value) -> ToolCall {
         Some(Value::Object(map)) => Value::Object(map.clone()),
         _ => json!({}),
     };
-    ToolCall { id, name, arguments }
+    ToolCall {
+        id,
+        name,
+        arguments,
+    }
 }
 
 /// 广播确认请求并等待用户应答；超时按拒绝。
@@ -145,7 +154,10 @@ async fn request_confirmation(
     });
 
     let (tx, rx) = oneshot::channel();
-    pending().lock().expect("确认表被污染").insert(call.id.clone(), tx);
+    pending()
+        .lock()
+        .expect("确认表被污染")
+        .insert(call.id.clone(), tx);
 
     // 超时后弹窗并不撤销（Electron 也没撤），用户之后点的应答会因为条目已删而被丢掉
     let timed_out = call.id.clone();
@@ -165,11 +177,8 @@ async fn request_confirmation(
         }
     }
 
-    match rx.await {
-        Ok(decision) => decision,
-        // sender 被丢弃只可能是进程关闭，按拒绝处理
-        Err(_) => (false, false),
-    }
+    // sender 被丢弃只可能是进程关闭，按拒绝处理
+    rx.await.unwrap_or_default()
 }
 
 // ---------- 工具执行主循环 ----------
@@ -224,7 +233,11 @@ pub async fn run_tool_calls(
 
         // 高危命令在进入确认前直接拒绝（04 §3.3 FORBIDDEN），连弹窗都不弹
         if call.name == "execute_command" {
-            let command = call.arguments.get("command").and_then(|v| v.as_str()).unwrap_or("");
+            let command = call
+                .arguments
+                .get("command")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let guard = security::guard_command(command);
             if !guard.allowed {
                 push_error(
@@ -241,7 +254,10 @@ pub async fn run_tool_calls(
             push_error(
                 &mut results,
                 call.id,
-                format!("本轮工具调用已达上限 {} 次，请基于已有结果直接回答", limiter::MAX_TOOL_CALLS_PER_TURN),
+                format!(
+                    "本轮工具调用已达上限 {} 次，请基于已有结果直接回答",
+                    limiter::MAX_TOOL_CALLS_PER_TURN
+                ),
             );
             continue;
         }
@@ -313,14 +329,24 @@ pub async fn request_task_command(app: &AppHandle, task_name: &str, command: &st
         eprintln!("[Z-Bot Main] 任务命令被安全策略拒绝: {:?}", guard.reason);
         return json!({ "ok": false, "error": format!("命令被安全策略拒绝: {}", guard.reason.unwrap_or_default()) });
     }
-    let short_id: String = uuid::Uuid::new_v4().simple().to_string().chars().take(6).collect();
+    let short_id: String = uuid::Uuid::new_v4()
+        .simple()
+        .to_string()
+        .chars()
+        .take(6)
+        .collect();
     let call = ToolCall {
         id: format!("task_{}_{short_id}", now_ms()),
         name: "execute_command".to_string(),
         arguments: json!({ "command": command }),
     };
     println!("[Z-Bot Main] 任务「{task_name}」请求执行命令，等待用户确认");
-    let (approved, _) = request_confirmation(app, &call, Some(&format!("定时任务「{task_name}」想要执行命令"))).await;
+    let (approved, _) = request_confirmation(
+        app,
+        &call,
+        Some(&format!("定时任务「{task_name}」想要执行命令")),
+    )
+    .await;
     if !approved {
         return json!({ "ok": false, "error": "用户拒绝执行任务命令" });
     }
@@ -340,11 +366,26 @@ pub(crate) struct QuickCommand {
 
 /// 五条内置指令全为 enabled；Electron 的 commands 数组只存在内存里，没有任何持久化与增删入口。
 const QUICK_COMMANDS: [QuickCommand; 5] = [
-    QuickCommand { trigger: "今天天气", response: "好的！让我帮你查一下天气~ 🌤️" },
-    QuickCommand { trigger: "番茄钟", response: "好的！开始25分钟专注时间~ 🍅" },
-    QuickCommand { trigger: "讲个笑话", response: "为什么程序员分不清万圣节和圣诞节？因为 Oct 31 == Dec 25！😂" },
-    QuickCommand { trigger: "休息一下", response: "好呀！起来活动一下身体吧~ 🧘" },
-    QuickCommand { trigger: "加油", response: "你一定可以的！我相信你！💪🐱" },
+    QuickCommand {
+        trigger: "今天天气",
+        response: "好的！让我帮你查一下天气~ 🌤️",
+    },
+    QuickCommand {
+        trigger: "番茄钟",
+        response: "好的！开始25分钟专注时间~ 🍅",
+    },
+    QuickCommand {
+        trigger: "讲个笑话",
+        response: "为什么程序员分不清万圣节和圣诞节？因为 Oct 31 == Dec 25！😂",
+    },
+    QuickCommand {
+        trigger: "休息一下",
+        response: "好呀！起来活动一下身体吧~ 🧘",
+    },
+    QuickCommand {
+        trigger: "加油",
+        response: "你一定可以的！我相信你！💪🐱",
+    },
 ];
 
 pub fn check_quick_command(text: &str) -> Option<&'static QuickCommand> {
@@ -353,13 +394,18 @@ pub fn check_quick_command(text: &str) -> Option<&'static QuickCommand> {
 }
 
 fn last_message_text(messages: &[ai::Message]) -> String {
-    messages.last().map(|m| m.content.clone()).unwrap_or_default()
+    messages
+        .last()
+        .map(|m| m.content.clone())
+        .unwrap_or_default()
 }
 
 /// 对照 ai-router.ts 的 maybeExtractMemory：抽的是**请求**消息，不是回复。
 fn maybe_extract_memory(messages: &[ai::Message]) {
-    let pairs: Vec<(&str, &str)> =
-        messages.iter().map(|m| (m.role.as_str(), m.content.as_str())).collect();
+    let pairs: Vec<(&str, &str)> = messages
+        .iter()
+        .map(|m| (m.role.as_str(), m.content.as_str()))
+        .collect();
     memory::extract_from_conversation(&pairs);
 }
 
@@ -373,7 +419,11 @@ fn equipped(mut req: ai::ChatRequest, cfg: &Value, provider: &ai::Provider) -> a
 }
 
 /// ChatResponse + 工具链路结果，拼成渲染端看到的 `{...final, toolCalls, toolResults}`
-fn with_tools(final_response: &ai::ChatResponse, calls: &Option<Vec<Value>>, results: &[tools::ToolResult]) -> Value {
+fn with_tools(
+    final_response: &ai::ChatResponse,
+    calls: &Option<Vec<Value>>,
+    results: &[tools::ToolResult],
+) -> Value {
     let mut out = serde_json::to_value(final_response).unwrap_or_else(|_| json!({ "content": "" }));
     if let Some(obj) = out.as_object_mut() {
         if let Some(calls) = calls {
@@ -415,7 +465,12 @@ async fn chat_inner(app: &AppHandle, request: Value) -> Result<Value, String> {
         return Ok(json!({ "content": matched.response }));
     }
 
-    if response.tool_calls.as_deref().map(|c| !c.is_empty()).unwrap_or(false) {
+    if response
+        .tool_calls
+        .as_deref()
+        .map(|c| !c.is_empty())
+        .unwrap_or(false)
+    {
         let (results, final_response) =
             run_tool_calls(app, &provider, &original, &req.model, &response, None).await?;
         maybe_extract_memory(&original);
@@ -504,7 +559,12 @@ async fn stream_inner(
         ai::stream_chat(&provider, &req, &mut emit).await?
     };
 
-    if response.tool_calls.as_deref().map(|c| !c.is_empty()).unwrap_or(false) {
+    if response
+        .tool_calls
+        .as_deref()
+        .map(|c| !c.is_empty())
+        .unwrap_or(false)
+    {
         let (results, final_response) = run_tool_calls(
             app,
             &provider,
@@ -534,10 +594,17 @@ pub fn tools_list() -> Vec<Value> {
     tools::tool_list()
         .into_iter()
         .map(|t| {
-            let name = t.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            let name = t
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
             let mut t = t;
             if let Some(obj) = t.as_object_mut() {
-                obj.insert("riskLevel".into(), json!(security::risk_level(&name) as i32));
+                obj.insert(
+                    "riskLevel".into(),
+                    json!(security::risk_level(&name) as i32),
+                );
             }
             t
         })
@@ -598,12 +665,19 @@ mod tests {
         assert!(needs_confirmation("clipboard_read"));
         add_always_allowed("clipboard_read");
         add_always_allowed("clipboard_read");
-        assert_eq!(list_always_allowed(), vec!["clipboard_read".to_string()], "重复登记不该出现两次");
+        assert_eq!(
+            list_always_allowed(),
+            vec!["clipboard_read".to_string()],
+            "重复登记不该出现两次"
+        );
         assert!(!needs_confirmation("clipboard_read"));
         // DANGEROUS 不接受总是允许
         add_always_allowed("execute_command");
         assert!(needs_confirmation("execute_command"));
-        assert_eq!(revoke_always_allowed("clipboard_read"), vec!["execute_command".to_string()]);
+        assert_eq!(
+            revoke_always_allowed("clipboard_read"),
+            vec!["execute_command".to_string()]
+        );
         assert!(needs_confirmation("clipboard_read"));
         reset_for_tests();
     }
@@ -617,7 +691,8 @@ mod tests {
         assert_eq!(call.arguments["city"], json!("上海"));
 
         // ollama：无 id，arguments 是对象
-        let ollama = json!({ "function": { "name": "control_pet", "arguments": { "action": "dance" } } });
+        let ollama =
+            json!({ "function": { "name": "control_pet", "arguments": { "action": "dance" } } });
         let call = normalize_tool_call(&ollama);
         assert!(call.id.starts_with("call_"), "缺 id 要补时间戳 id");
         assert_eq!(call.arguments["action"], json!("dance"));
@@ -629,9 +704,18 @@ mod tests {
 
     #[test]
     fn quick_command_is_substring_and_case_insensitive() {
-        assert_eq!(check_quick_command("今天天气怎么样").map(|c| c.response), Some("好的！让我帮你查一下天气~ 🌤️"));
-        assert_eq!(check_quick_command("加油!").map(|c| c.trigger), Some("加油"));
-        assert_eq!(check_quick_command("Give me a TOMATO 番茄钟 task").map(|c| c.trigger), Some("番茄钟"));
+        assert_eq!(
+            check_quick_command("今天天气怎么样").map(|c| c.response),
+            Some("好的！让我帮你查一下天气~ 🌤️")
+        );
+        assert_eq!(
+            check_quick_command("加油!").map(|c| c.trigger),
+            Some("加油")
+        );
+        assert_eq!(
+            check_quick_command("Give me a TOMATO 番茄钟 task").map(|c| c.trigger),
+            Some("番茄钟")
+        );
         assert!(check_quick_command("随便说点什么").is_none());
     }
 

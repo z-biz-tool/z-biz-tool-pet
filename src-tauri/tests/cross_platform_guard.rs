@@ -375,10 +375,7 @@ fn detector_catches_unguarded_windows_import() {
 #[test]
 fn detector_catches_missing_non_windows_stub() {
     let v = missing_stub_markers("pub fn grab_screen() { }\n");
-    assert!(
-        v.len() >= 2,
-        "探测器没咬住：stub 文案全没了只报了 {v:?}"
-    );
+    assert!(v.len() >= 2, "探测器没咬住：stub 文案全没了只报了 {v:?}");
 }
 
 /// 反例 6：前缀陷阱那条测试回退到 `build_allowed_roots` ⇒ 必须报违规。

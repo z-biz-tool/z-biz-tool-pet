@@ -35,7 +35,13 @@ fn notes_submenu(app: &AppHandle) -> tauri::Result<Submenu<Wry>> {
     let sub = Submenu::new(app, "📝 快速笔记", true)?;
     let notes = actions::list_notes();
     if notes.is_empty() {
-        sub.append(&MenuItem::with_id(app, "note-empty", "暂无笔记", false, None::<&str>)?)?;
+        sub.append(&MenuItem::with_id(
+            app,
+            "note-empty",
+            "暂无笔记",
+            false,
+            None::<&str>,
+        )?)?;
         sub.append(&MenuItem::with_id(
             app,
             "note-hint",
@@ -64,7 +70,13 @@ fn notes_submenu(app: &AppHandle) -> tauri::Result<Submenu<Wry>> {
         false,
         None::<&str>,
     )?)?;
-    sub.append(&MenuItem::with_id(app, "clear-notes", "清空全部笔记", true, None::<&str>)?)?;
+    sub.append(&MenuItem::with_id(
+        app,
+        "clear-notes",
+        "清空全部笔记",
+        true,
+        None::<&str>,
+    )?)?;
     Ok(sub)
 }
 
@@ -74,7 +86,11 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let visible = actions::pet_window(app)
         .map(|w| w.is_visible().unwrap_or(false))
         .unwrap_or(false);
-    let pet_text = if visible { "🐱 隐藏萌宠" } else { "🐱 显示萌宠" };
+    let pet_text = if visible {
+        "🐱 隐藏萌宠"
+    } else {
+        "🐱 显示萌宠"
+    };
     menu.append(&MenuItem::with_id(
         app,
         "show-pet",
@@ -82,10 +98,28 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         true,
         None::<&str>,
     )?)?;
-    menu.append(&MenuItem::with_id(app, "show-admin", "💻 打开管理端", true, None::<&str>)?)?;
+    menu.append(&MenuItem::with_id(
+        app,
+        "show-admin",
+        "💻 打开管理端",
+        true,
+        None::<&str>,
+    )?)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
-    menu.append(&MenuItem::with_id(app, "voice-start", "🎙️ 开始语音对话", true, None::<&str>)?)?;
-    menu.append(&MenuItem::with_id(app, "voice-stop", "⏹️ 停止语音对话", true, None::<&str>)?)?;
+    menu.append(&MenuItem::with_id(
+        app,
+        "voice-start",
+        "🎙️ 开始语音对话",
+        true,
+        None::<&str>,
+    )?)?;
+    menu.append(&MenuItem::with_id(
+        app,
+        "voice-stop",
+        "⏹️ 停止语音对话",
+        true,
+        None::<&str>,
+    )?)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
     menu.append(&notes_submenu(app)?)?;
     menu.append(&CheckMenuItem::with_id(
@@ -105,7 +139,13 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         None::<&str>,
     )?)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
-    menu.append(&MenuItem::with_id(app, "settings", "⚙️ 设置", true, None::<&str>)?)?;
+    menu.append(&MenuItem::with_id(
+        app,
+        "settings",
+        "⚙️ 设置",
+        true,
+        None::<&str>,
+    )?)?;
     menu.append(&CheckMenuItem::with_id(
         app,
         "autostart",
@@ -115,7 +155,13 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
         None::<&str>,
     )?)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
-    menu.append(&MenuItem::with_id(app, "quit", "❌ 退出", true, None::<&str>)?)?;
+    menu.append(&MenuItem::with_id(
+        app,
+        "quit",
+        "❌ 退出",
+        true,
+        None::<&str>,
+    )?)?;
     Ok(menu)
 }
 
@@ -246,8 +292,15 @@ mod tests {
         assert_eq!(note_label("   \n\t "), "(空白的笔记)");
         let long = "一".repeat(40);
         let label = note_label(&long);
-        assert_eq!(label.chars().count(), NOTE_LABEL_CHARS + 1, "截到 28 字再加省略号");
+        assert_eq!(
+            label.chars().count(),
+            NOTE_LABEL_CHARS + 1,
+            "截到 28 字再加省略号"
+        );
         assert!(label.ends_with('…'));
-        assert_eq!(note_label(&"二".repeat(NOTE_LABEL_CHARS)), "二".repeat(NOTE_LABEL_CHARS));
+        assert_eq!(
+            note_label(&"二".repeat(NOTE_LABEL_CHARS)),
+            "二".repeat(NOTE_LABEL_CHARS)
+        );
     }
 }

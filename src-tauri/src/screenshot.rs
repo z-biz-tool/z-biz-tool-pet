@@ -42,15 +42,15 @@ use windows::core::BOOL;
 use windows::Win32::Foundation::{HWND, LPARAM, RECT};
 #[cfg(windows)]
 use windows::Win32::Graphics::Gdi::{
-    BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, GetDC,
-    GetWindowDC, ReleaseDC, SelectObject, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, HDC,
-    HGDIOBJ, SRCCOPY,
+    BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, GetDIBits,
+    GetWindowDC, ReleaseDC, SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+    HDC, HGDIOBJ, SRCCOPY,
 };
 #[cfg(windows)]
 use windows::Win32::Storage::Xps::{PrintWindow, PRINT_WINDOW_FLAGS};
 #[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetSystemMetrics, GetWindowTextW, GetWindowRect, IsWindowVisible,
+    EnumWindows, GetSystemMetrics, GetWindowRect, GetWindowTextW, IsWindowVisible,
     PW_RENDERFULLCONTENT, SM_CXSCREEN, SM_CYSCREEN,
 };
 
@@ -153,7 +153,7 @@ fn downscale_factor(width: usize, height: usize) -> f64 {
 #[cfg(any(windows, test))]
 fn encode_jpeg(pixels: Vec<u8>, width: usize, height: usize) -> Vec<u8> {
     let mut rgb: Vec<u8> = Vec::with_capacity(width * height * 3);
-    for chunk in pixels.chunks_exact(4) {
+    for chunk in pixels.as_chunks::<4>().0 {
         rgb.extend_from_slice(&[chunk[2], chunk[1], chunk[0]]);
     }
     let scale = downscale_factor(width, height);
@@ -166,10 +166,19 @@ fn encode_jpeg(pixels: Vec<u8>, width: usize, height: usize) -> Vec<u8> {
         let img = ImageBuffer::<Rgb<u8>, Vec<u8>>::from_vec(width as u32, height as u32, rgb)
             .expect("像素缓冲按宽高分配，长度必然匹配");
         let small = image::imageops::resize(&img, w, h, image::imageops::FilterType::Triangle);
-        JpegEncoder::new_with_quality(&mut out, JPEG_QUALITY).encode(small.as_raw(), w, h, ExtendedColorType::Rgb8)
+        JpegEncoder::new_with_quality(&mut out, JPEG_QUALITY).encode(
+            small.as_raw(),
+            w,
+            h,
+            ExtendedColorType::Rgb8,
+        )
     } else {
-        JpegEncoder::new_with_quality(&mut out, JPEG_QUALITY)
-            .encode(&rgb, width as u32, height as u32, ExtendedColorType::Rgb8)
+        JpegEncoder::new_with_quality(&mut out, JPEG_QUALITY).encode(
+            &rgb,
+            width as u32,
+            height as u32,
+            ExtendedColorType::Rgb8,
+        )
     };
     match encoded {
         Ok(()) => out,
@@ -260,7 +269,9 @@ pub fn grab_window(window_name: Option<&str>) -> Result<(Vec<u8>, String), Strin
         return Err("未找到目标窗口".to_string());
     }
     let picked = match window_name {
-        Some(name) if !name.trim().is_empty() => found.iter().find(|(_, t)| t.contains(name.trim())),
+        Some(name) if !name.trim().is_empty() => {
+            found.iter().find(|(_, t)| t.contains(name.trim()))
+        }
         _ => found.first(),
     }
     .ok_or_else(|| "未找到目标窗口".to_string())?;
@@ -312,7 +323,9 @@ pub fn write_jpeg(bytes: &[u8]) -> Result<String, String> {
 pub fn cleanup_stale_screenshots() {
     let dir = std::env::temp_dir();
     let cutoff = now_ms().saturating_sub(KEEP_HOURS * 3600 * 1000);
-    let Ok(entries) = std::fs::read_dir(&dir) else { return };
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
         if !name.starts_with("zbot_screenshot_") || !name.ends_with(".jpg") {
@@ -348,7 +361,9 @@ pub fn screenshot_capture() -> Value {
     }
     match grab_screen() {
         Ok(bytes) if !bytes.is_empty() => match write_jpeg(&bytes) {
-            Ok(path) => json!({ "success": true, "path": path, "imageBase64": BASE64.encode(&bytes) }),
+            Ok(path) => {
+                json!({ "success": true, "path": path, "imageBase64": BASE64.encode(&bytes) })
+            }
             Err(e) => json!({ "success": false, "error": e }),
         },
         Ok(_) => json!({ "success": false, "error": "无法获取屏幕截图" }),
@@ -391,7 +406,11 @@ pub async fn screenshot_capture_and_analyze(question: Option<String>) -> Value {
         .unwrap_or_else(|| "请描述一下你看到的屏幕内容，简要说明当前正在做什么。".to_string());
     let request = ai::ChatRequest {
         messages: vec![
-            ai::Message { role: "system".into(), content: system_prompt(&cfg), images: None },
+            ai::Message {
+                role: "system".into(),
+                content: system_prompt(&cfg),
+                images: None,
+            },
             ai::Message {
                 role: "user".into(),
                 content: prompt,
@@ -403,7 +422,9 @@ pub async fn screenshot_capture_and_analyze(question: Option<String>) -> Value {
         tools: None,
     };
     match ai::chat(&provider, &request).await {
-        Ok(response) => json!({ "success": true, "analysis": response.content, "imageBase64": image_base64 }),
+        Ok(response) => {
+            json!({ "success": true, "analysis": response.content, "imageBase64": image_base64 })
+        }
         Err(e) => json!({ "success": false, "error": e }),
     }
 }

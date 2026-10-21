@@ -63,6 +63,8 @@ jobs:
           cache: 'npm'
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
 
       # GitHub 新 token 会写坏 dtolnay 生成的 cargo config（2026-10-03 收编进模板）
       - name: Reset broken cargo config
@@ -103,6 +105,22 @@ jobs:
         # ⇒ 本仓「[LIVE] 跳过 minimax 真实 API 实测…」这类跳过标记在 CI 日志里
         # 看不见 ⇒ 「没跑」看着跟「跑过了」一样。打开捕获后可核对。
         run: cargo test --all-targets -- --nocapture
+
+      # 2026-10-21 新增：静态门此前一条都没有（本仓 CI 只跑 typecheck/lint/build/测试），
+      # 而本地实测 `cargo clippy --all-targets -- -D warnings` 有 16 条、
+      # `cargo fmt --all --check` 有 196 处差异 ——
+      # 「静态门红了但 CI 不跑那个门 ⇒ 没人看见」（家族 R12）。
+      # 债已在同一次提交里清零（clippy 16 条：自动修 9 条 + 手工 7 条；fmt 整仓重排）。
+      #
+      # **Windows 专属的 lint 只有这条腿能量到**（pet 大量代码在 `#[cfg(windows)]` 里，
+      # macOS 本机永远绿）—— 所以这条门禁放在 Windows 腿上是对的位置。
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Format
+        working-directory: src-tauri
+        run: cargo fmt --all --check
 
       # 端点台账：契约快照（scripts/endpoint-contract.json）里每一个都必须接通
       - name: Port ledger

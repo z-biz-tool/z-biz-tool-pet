@@ -61,28 +61,49 @@ fn is_http(url: &str) -> bool {
 pub fn feed_from_values(env_url: Option<&str>, file: Option<&Value>) -> Option<Feed> {
     if let Some(raw) = env_url.map(|s| s.trim()).filter(|s| !s.is_empty()) {
         if is_http(raw) {
-            return Some(Feed { url: raw.to_string(), channel: None });
+            return Some(Feed {
+                url: raw.to_string(),
+                channel: None,
+            });
         }
     }
     let file = file?;
-    let url = file.get("url").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+    let url = file
+        .get("url")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if !is_http(&url) {
         return None;
     }
-    Some(Feed { url, channel: file.get("channel").and_then(|v| v.as_str()).map(|s| s.to_string()) })
+    Some(Feed {
+        url,
+        channel: file
+            .get("channel")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string()),
+    })
 }
 
 fn read_feed() -> Option<Feed> {
     let path: PathBuf = store::data_dir().join(FEED_FILE);
     let text = std::fs::read_to_string(&path).ok();
-    let parsed = text.as_deref().and_then(|t| serde_json::from_str::<Value>(t).ok());
-    feed_from_values(std::env::var("ZBOT_UPDATE_FEED_URL").ok().as_deref(), parsed.as_ref())
+    let parsed = text
+        .as_deref()
+        .and_then(|t| serde_json::from_str::<Value>(t).ok());
+    feed_from_values(
+        std::env::var("ZBOT_UPDATE_FEED_URL").ok().as_deref(),
+        parsed.as_ref(),
+    )
 }
 
 /// 版本号比较（a.b.c，缺位当 0）—— 与 z-biz-tool-file 的 is_newer_version 同规则
 pub fn is_newer_version(new: &str, old: &str) -> bool {
     let parse = |v: &str| -> Vec<u64> {
-        v.split('.').filter_map(|s| s.trim().parse::<u64>().ok()).collect()
+        v.split('.')
+            .filter_map(|s| s.trim().parse::<u64>().ok())
+            .collect()
     };
     let n = parse(new.trim_start_matches('v'));
     let o = parse(old.trim_start_matches('v'));
@@ -152,12 +173,21 @@ pub fn pick_asset(release: &Value) -> Option<(String, String)> {
     let (arch, ext) = asset_hint();
     let assets = release.get("assets")?.as_array()?;
     let hit = assets.iter().find(|a| {
-        let name = a.get("name").and_then(|v| v.as_str()).unwrap_or("").to_lowercase();
+        let name = a
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_lowercase();
         name.ends_with(ext) && name.contains(arch)
     })?;
     Some((
-        hit.get("name").and_then(|v| v.as_str()).unwrap_or("update").to_string(),
-        hit.get("browser_download_url").and_then(|v| v.as_str())?.to_string(),
+        hit.get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("update")
+            .to_string(),
+        hit.get("browser_download_url")
+            .and_then(|v| v.as_str())?
+            .to_string(),
     ))
 }
 
@@ -171,7 +201,10 @@ pub fn generic_asset(manifest_url: &str, path: &str) -> (String, String) {
 fn client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .timeout(CHECK_TIMEOUT)
-        .user_agent(concat!("z-biz-tool-pet-updater/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!(
+            "z-biz-tool-pet-updater/",
+            env!("CARGO_PKG_VERSION")
+        ))
         .build()
         .map_err(|e| e.to_string())
 }
@@ -180,7 +213,10 @@ fn client() -> Result<reqwest::Client, String> {
 fn download_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .connect_timeout(CHECK_TIMEOUT)
-        .user_agent(concat!("z-biz-tool-pet-updater/", env!("CARGO_PKG_VERSION")))
+        .user_agent(concat!(
+            "z-biz-tool-pet-updater/",
+            env!("CARGO_PKG_VERSION")
+        ))
         .build()
         .map_err(|e| e.to_string())
 }
@@ -207,7 +243,10 @@ pub fn manifest_url(feed: &Feed) -> String {
             .filter(|s| !s.is_empty())
             .collect();
         if segs.len() >= 3 {
-            return format!("https://api.github.com/repos/{}/{}/releases/latest", segs[1], segs[2]);
+            return format!(
+                "https://api.github.com/repos/{}/{}/releases/latest",
+                segs[1], segs[2]
+            );
         }
         return format!("https://api.github.com/repos/{GITHUB_REPO}/releases/latest");
     }
@@ -220,25 +259,33 @@ pub fn manifest_url(feed: &Feed) -> String {
 
 /// 下载目标目录：沿用兄弟仓库的 ~/Downloads，用户看得见
 pub fn downloads_dir() -> PathBuf {
-    dirs::home_dir().map(|h| h.join("Downloads")).unwrap_or_else(std::env::temp_dir)
+    dirs::home_dir()
+        .map(|h| h.join("Downloads"))
+        .unwrap_or_else(std::env::temp_dir)
 }
 
 /// 检查更新。返回的就是渲染层要显示的 UpdateCheckResult。
 pub async fn check(app: &AppHandle) -> Value {
     // Tauri 侧的"开发模式"就是调试构建：Electron 用 app.isPackaged
     if cfg!(debug_assertions) {
-        return set_and_return(app, json!({
-            "ok": false,
-            "status": "dev-mode",
-            "reason": "开发模式下不检查更新（调试构建没有安装器可替换）",
-        }));
+        return set_and_return(
+            app,
+            json!({
+                "ok": false,
+                "status": "dev-mode",
+                "reason": "开发模式下不检查更新（调试构建没有安装器可替换）",
+            }),
+        );
     }
     let Some(feed) = read_feed() else {
-        return set_and_return(app, json!({
-            "ok": false,
-            "status": "no-feed",
-            "reason": "未配置发布源：设置 ZBOT_UPDATE_FEED_URL 或 ~/.z-bot/update-feed.json",
-        }));
+        return set_and_return(
+            app,
+            json!({
+                "ok": false,
+                "status": "no-feed",
+                "reason": "未配置发布源：设置 ZBOT_UPDATE_FEED_URL 或 ~/.z-bot/update-feed.json",
+            }),
+        );
     };
 
     let url = manifest_url(&feed);
@@ -284,7 +331,11 @@ async fn do_check(url: &str, github: bool) -> Value {
     };
 
     if is_newer_version(&latest, CURRENT_VERSION) {
-        set_pending(asset.map(|(name, url)| Pending { version: latest.clone(), name, url }));
+        set_pending(asset.map(|(name, url)| Pending {
+            version: latest.clone(),
+            name,
+            url,
+        }));
         json!({ "ok": true, "status": "available", "version": latest })
     } else {
         set_pending(None);
@@ -360,7 +411,8 @@ async fn download_to(url: &str, dest: &PathBuf, app: &AppHandle) -> Result<u64, 
     let mut stream = resp.bytes_stream();
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| format!("下载中断: {e}"))?;
-        file.write_all(&chunk).map_err(|e| format!("写入失败: {e}"))?;
+        file.write_all(&chunk)
+            .map_err(|e| format!("写入失败: {e}"))?;
         got += chunk.len() as u64;
         if total > 0 {
             let percent = ((got as f64 / total as f64) * 100.0).round() as i64;
@@ -394,7 +446,10 @@ fn open_installer(path: &str) -> Result<(), String> {
     }
     #[cfg(target_os = "macos")]
     {
-        std::process::Command::new("open").arg(path).spawn().map_err(|e| e.to_string())?;
+        std::process::Command::new("open")
+            .arg(path)
+            .spawn()
+            .map_err(|e| e.to_string())?;
         Ok(())
     }
     #[cfg(not(any(windows, target_os = "macos")))]
@@ -451,9 +506,18 @@ mod tests {
             Some("ftp://nope"),
             Some(&json!({ "url": "https://nas.local/zbot", "channel": "beta" })),
         );
-        assert_eq!(from_file.unwrap(), Feed { url: "https://nas.local/zbot".into(), channel: Some("beta".into()) });
+        assert_eq!(
+            from_file.unwrap(),
+            Feed {
+                url: "https://nas.local/zbot".into(),
+                channel: Some("beta".into())
+            }
+        );
 
-        assert_eq!(feed_from_values(Some(""), Some(&json!({ "url": "not-a-url" }))), None);
+        assert_eq!(
+            feed_from_values(Some(""), Some(&json!({ "url": "not-a-url" }))),
+            None
+        );
         assert_eq!(feed_from_values(None, None), None);
         assert_eq!(feed_from_values(None, Some(&json!({ "url": "  " }))), None);
     }
@@ -476,25 +540,49 @@ mod tests {
         let (v, p) = parse_latest_yml(yml).unwrap();
         assert_eq!(v, "9.9.9");
         assert_eq!(p.unwrap(), "z-biz-tool-pet_9.9.9_x64-setup.exe");
-        assert!(parse_latest_yml("foo: bar").is_none(), "没有 version 就不能算清单");
+        assert!(
+            parse_latest_yml("foo: bar").is_none(),
+            "没有 version 就不能算清单"
+        );
     }
 
     #[test]
     fn github_tag_needs_the_v_stripped() {
-        assert_eq!(version_from_release(&json!({ "tag_name": "v1.2.3" })), Some("1.2.3".to_string()));
+        assert_eq!(
+            version_from_release(&json!({ "tag_name": "v1.2.3" })),
+            Some("1.2.3".to_string())
+        );
         assert_eq!(version_from_release(&json!({})), None);
         assert_eq!(version_from_release(&json!({ "tag_name": "  " })), None);
     }
 
     #[test]
     fn manifest_url_normalizes_both_feed_shapes() {
-        let gh = Feed { url: "https://github.com/z-biz-tool/z-biz-tool-pet".into(), channel: None };
-        assert_eq!(manifest_url(&gh), "https://api.github.com/repos/z-biz-tool/z-biz-tool-pet/releases/latest");
-        let api = Feed { url: "https://api.github.com/repos/x/y/releases/latest".into(), channel: None };
-        assert_eq!(manifest_url(&api), "https://api.github.com/repos/z-biz-tool/z-biz-tool-pet/releases/latest");
-        let dir = Feed { url: "https://nas.local/zbot".into(), channel: Some("beta".into()) };
+        let gh = Feed {
+            url: "https://github.com/z-biz-tool/z-biz-tool-pet".into(),
+            channel: None,
+        };
+        assert_eq!(
+            manifest_url(&gh),
+            "https://api.github.com/repos/z-biz-tool/z-biz-tool-pet/releases/latest"
+        );
+        let api = Feed {
+            url: "https://api.github.com/repos/x/y/releases/latest".into(),
+            channel: None,
+        };
+        assert_eq!(
+            manifest_url(&api),
+            "https://api.github.com/repos/z-biz-tool/z-biz-tool-pet/releases/latest"
+        );
+        let dir = Feed {
+            url: "https://nas.local/zbot".into(),
+            channel: Some("beta".into()),
+        };
         assert_eq!(manifest_url(&dir), "https://nas.local/zbot/beta/latest.yml");
-        let direct = Feed { url: "https://nas.local/zbot/latest.yml".into(), channel: None };
+        let direct = Feed {
+            url: "https://nas.local/zbot/latest.yml".into(),
+            channel: None,
+        };
         assert_eq!(manifest_url(&direct), "https://nas.local/zbot/latest.yml");
     }
 
@@ -506,7 +594,10 @@ mod tests {
             { "name": "source.zip", "browser_download_url": "https://x/src", "size": 1 },
             { "name": name.clone(), "browser_download_url": "https://x/setup", "size": 42 },
         ]});
-        assert_eq!(pick_asset(&release).expect("必须命中本平台安装包"), (name, "https://x/setup".to_string()));
+        assert_eq!(
+            pick_asset(&release).expect("必须命中本平台安装包"),
+            (name, "https://x/setup".to_string())
+        );
         assert!(pick_asset(&json!({ "assets": [] })).is_none());
     }
 
@@ -518,7 +609,10 @@ mod tests {
             "z-biz-tool-pet_1.0.3_x64-setup.exe",
         );
         assert_eq!(name, "z-biz-tool-pet_1.0.3_x64-setup.exe");
-        assert_eq!(url, "https://nas.local/zbot/beta/z-biz-tool-pet_1.0.3_x64-setup.exe");
+        assert_eq!(
+            url,
+            "https://nas.local/zbot/beta/z-biz-tool-pet_1.0.3_x64-setup.exe"
+        );
 
         // 直接给 .yml 当源时目录就是它自己那一层
         let (_, url) = generic_asset("https://nas.local/zbot/latest.yml", "sub/a-setup.exe");
@@ -528,7 +622,10 @@ mod tests {
     #[test]
     fn status_starts_with_a_reason_instead_of_a_panic() {
         // 首次调用前 LAST 是空的，渲染层要拿到 no-feed 而不是 undefined
-        assert_eq!(last_result().get("status").unwrap().as_str().unwrap(), "no-feed");
+        assert_eq!(
+            last_result().get("status").unwrap().as_str().unwrap(),
+            "no-feed"
+        );
         assert!(last_result().get("reason").is_some());
     }
 }

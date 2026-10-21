@@ -73,7 +73,10 @@ fn segments_of() -> Vec<Value> {
 }
 
 fn field(st: &Value, key: &str) -> String {
-    st.get(key).and_then(|v| v.as_str()).unwrap_or("").to_string()
+    st.get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
 }
 
 /// 改状态并广播 `meeting:state`；Electron 的 broadcast 打给所有窗口
@@ -384,8 +387,16 @@ async fn ask(system: &str, user: &str) -> Result<String, String> {
         // 空串 = 走 resolve_model 的 aiModel || modelName，与 Electron 取值顺序一致
         model: ai::resolve_model("", &cfg, &provider),
         messages: vec![
-            ai::Message { role: "system".into(), content: system.into(), images: None },
-            ai::Message { role: "user".into(), content: user.into(), images: None },
+            ai::Message {
+                role: "system".into(),
+                content: system.into(),
+                images: None,
+            },
+            ai::Message {
+                role: "user".into(),
+                content: user.into(),
+                images: None,
+            },
         ],
         stream: Some(false),
         tools: None,
@@ -408,7 +419,11 @@ async fn update_rolling_summary(app: &AppHandle) {
         .rev()
         .take(SUMMARY_WINDOW)
         .rev()
-        .filter_map(|s| s.get("text").and_then(|t| t.as_str()).map(|t| t.to_string()))
+        .filter_map(|s| {
+            s.get("text")
+                .and_then(|t| t.as_str())
+                .map(|t| t.to_string())
+        })
         .collect();
     let previous = field(&st, "rollingSummary");
     let prompt = rolling_prompt(&previous, &recent.join("\n"));
@@ -709,7 +724,8 @@ pub async fn meeting_start(app: AppHandle, title: String) -> Value {
         Ok(cap) => cap,
         Err(e) => {
             // 状态里给完整指引，返回值只给原始原因（Electron 的 throw e 就是这个形状）
-            let decorated = format!("无法启动音频捕获: {e}。请安装 sox (brew install sox) 或 ffmpeg");
+            let decorated =
+                format!("无法启动音频捕获: {e}。请安装 sox (brew install sox) 或 ffmpeg");
             update_state(&app, |st| {
                 st["status"] = json!("error");
                 st["error"] = json!(decorated);
@@ -758,7 +774,13 @@ mod tests {
     use super::*;
 
     fn info() -> WavInfo {
-        WavInfo { data_offset: 44, byte_rate: 32000, bits_per_sample: 16, channels: 1, sample_rate: 16000 }
+        WavInfo {
+            data_offset: 44,
+            byte_rate: 32000,
+            bits_per_sample: 16,
+            channels: 1,
+            sample_rate: 16000,
+        }
     }
 
     /// 造一个 16k 单声道 16 bit 的 wav，PCM 内容按 i%251 递增，方便核对切片位置
@@ -791,7 +813,7 @@ mod tests {
         buf.extend_from_slice(&32000u32.to_le_bytes()); // byteRate
         buf.extend_from_slice(&[2, 0]); // blockAlign
         buf.extend_from_slice(&[16, 0]); // bits
-        // fmt 之后还有一块奇数长度的 LIST，正文 5 字节 + 1 个补位，所以 data 落在 50
+                                         // fmt 之后还有一块奇数长度的 LIST，正文 5 字节 + 1 个补位，所以 data 落在 50
         buf.extend_from_slice(b"LIST");
         buf.extend_from_slice(&5u32.to_le_bytes());
         buf.extend_from_slice(b"INFO!x");
@@ -801,7 +823,13 @@ mod tests {
         let parsed = parse_wav_header(&buf).expect("必须解析出 data 块");
         assert_eq!(
             parsed,
-            WavInfo { data_offset: 58, byte_rate: 32000, bits_per_sample: 16, channels: 1, sample_rate: 16000 }
+            WavInfo {
+                data_offset: 58,
+                byte_rate: 32000,
+                bits_per_sample: 16,
+                channels: 1,
+                sample_rate: 16000
+            }
         );
     }
 
@@ -845,7 +873,11 @@ mod tests {
         assert_eq!(start_ms, 16, "500 B / 32000 B/s = 15.625 ms");
         let out = std::fs::read(&dst).unwrap();
         assert_eq!(out.len(), 44 + 500);
-        assert_eq!(&out[44..], &pcm[500..], "切片内容必须正好从上次停下的地方继续");
+        assert_eq!(
+            &out[44..],
+            &pcm[500..],
+            "切片内容必须正好从上次停下的地方继续"
+        );
 
         // 已经没有新音频
         assert_eq!(extract_audio_chunk(&src, &dst, 1000), None);
@@ -859,7 +891,11 @@ mod tests {
         let dst = dir.join("chunk.wav");
 
         // 奇数字节：半个采样点必须丢掉，否则 whisper 会把这一字节当新采样读
-        std::fs::write(&src, make_wav(&(0..1001u32).map(|i| i as u8).collect::<Vec<u8>>())).unwrap();
+        std::fs::write(
+            &src,
+            make_wav(&(0..1001u32).map(|i| i as u8).collect::<Vec<u8>>()),
+        )
+        .unwrap();
         let (bytes, _) = extract_audio_chunk(&src, &dst, 0).unwrap();
         assert_eq!(bytes, 1000);
 
@@ -891,7 +927,13 @@ mod tests {
 
     #[test]
     fn transcript_file_keeps_the_electron_sections() {
-        let body = transcript_file_body("周会", "2026-01-01T00:00:00.000Z", "2026-01-01T01:00:00.000Z", "[00:00] 甲", "摘要");
+        let body = transcript_file_body(
+            "周会",
+            "2026-01-01T00:00:00.000Z",
+            "2026-01-01T01:00:00.000Z",
+            "[00:00] 甲",
+            "摘要",
+        );
         assert_eq!(
             body,
             "# 周会\n时间: 2026-01-01T00:00:00.000Z - 2026-01-01T01:00:00.000Z\n\n[00:00] 甲\n\n# 滚动摘要\n摘要\n"
@@ -901,15 +943,23 @@ mod tests {
     #[test]
     fn prompts_keep_the_electron_wording() {
         let first = rolling_prompt("", "甲\n乙");
-        assert!(first.starts_with("你是一个会议摘要助手。以下是最近的会议转录片段，请用 3-5 句话总结当前讨论的核心内容。"));
-        assert!(first.contains("\n\n之前的摘要:\n（暂无）\n\n最近的转录:\n甲\n乙\n\n请输出新的累计摘要（中文，简洁）:"));
+        assert!(first.starts_with(
+            "你是一个会议摘要助手。以下是最近的会议转录片段，请用 3-5 句话总结当前讨论的核心内容。"
+        ));
+        assert!(first.contains(
+            "\n\n之前的摘要:\n（暂无）\n\n最近的转录:\n甲\n乙\n\n请输出新的累计摘要（中文，简洁）:"
+        ));
         // 有前文时是增量更新，不是"暂无"
         assert!(rolling_prompt("已有摘要", "甲").contains("之前的摘要:\n已有摘要"));
 
         let last = final_prompt("转录正文");
-        assert!(last.starts_with("你是会议总结助手。请根据以下会议转录，输出结构化的最终总结：\n\n## 要点\n"));
+        assert!(last.starts_with(
+            "你是会议总结助手。请根据以下会议转录，输出结构化的最终总结：\n\n## 要点\n"
+        ));
         // 这里的引号是半角，逐字来自 meeting-transcriber.ts:266
-        assert!(last.contains("（用列表列出具体行动项和负责人，若没有明确负责人则写\"待定\"）\n\n会议转录:\n转录正文"));
+        assert!(last.contains(
+            "（用列表列出具体行动项和负责人，若没有明确负责人则写\"待定\"）\n\n会议转录:\n转录正文"
+        ));
     }
 
     #[test]
@@ -920,30 +970,45 @@ mod tests {
         assert!(args.windows(2).any(|w| w[0] == "-ar" && w[1] == "16000"));
         assert!(args.iter().any(|a| a == "-y"), "重名文件必须直接覆盖");
         #[cfg(windows)]
-        assert_eq!(&args[2..4], ["-i".to_string(), "audio=virtual-audio-capturer".to_string()]);
+        assert_eq!(
+            &args[2..4],
+            ["-i".to_string(), "audio=virtual-audio-capturer".to_string()]
+        );
         #[cfg(windows)]
-        assert_eq!(&args[0..2], ["-f".to_string(), "dshow".to_string()], "Windows 走 dshow");
+        assert_eq!(
+            &args[0..2],
+            ["-f".to_string(), "dshow".to_string()],
+            "Windows 走 dshow"
+        );
     }
 
     #[test]
     fn exit_reason_distinguishes_broken_ffmpeg_from_silence() {
         let dyld = capture_exit_reason(1, "dyld: Library not loaded: /usr/local/opt/x/liby.dylib");
         assert!(dyld.contains("音频捕获进程意外退出 (code=1)。"), "{dyld}");
-        assert!(dyld.contains("ffmpeg 安装已损坏（动态库缺失），需重装 ffmpeg"), "{dyld}");
-
-        let noisy = capture_exit_reason(
-            1,
-            "some device\n    error line with 空格\n",
+        assert!(
+            dyld.contains("ffmpeg 安装已损坏（动态库缺失），需重装 ffmpeg"),
+            "{dyld}"
         );
-        assert!(noisy.starts_with("音频捕获进程意外退出 (code=1)。 some device error line with 空格"), "{noisy}");
+
+        let noisy = capture_exit_reason(1, "some device\n    error line with 空格\n");
+        assert!(
+            noisy.starts_with("音频捕获进程意外退出 (code=1)。 some device error line with 空格"),
+            "{noisy}"
+        );
 
         let silent = capture_exit_reason(-1, "   \n ");
-        assert!(silent.ends_with("请检查麦克风/系统音频权限与 ffmpeg 是否可用"), "{silent}");
+        assert!(
+            silent.ends_with("请检查麦克风/系统音频权限与 ffmpeg 是否可用"),
+            "{silent}"
+        );
     }
 
     #[test]
     fn tail_collapse_flattens_whitespace_runs() {
-        let long: String = (0..400).map(|i| if i % 7 == 0 { '\n' } else { 'x' }).collect();
+        let long: String = (0..400)
+            .map(|i| if i % 7 == 0 { '\n' } else { 'x' })
+            .collect();
         let out = collapse_tail(&long, 200);
         assert_eq!(out.chars().count(), 200);
         assert!(!out.contains('\n'));

@@ -49,7 +49,11 @@ fn apply_affinity(win: &WebviewWindow, enabled: bool) -> Result<(), String> {
             SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE, WDA_NONE,
         };
         let hwnd = win.hwnd().map_err(|e| format!("hwnd 获取失败: {e}"))?;
-        let affinity = if enabled { WDA_EXCLUDEFROMCAPTURE } else { WDA_NONE };
+        let affinity = if enabled {
+            WDA_EXCLUDEFROMCAPTURE
+        } else {
+            WDA_NONE
+        };
         unsafe { SetWindowDisplayAffinity(hwnd, affinity) }
             .map_err(|e| format!("SetWindowDisplayAffinity 失败: {e}"))
     }
@@ -80,10 +84,17 @@ fn apply_stealth(app: &AppHandle, enabled: bool, persist: bool) -> bool {
             }
         }
     }
-    println!("[Z-Bot] 截图隐身模式: {}", if enabled { "开启" } else { "关闭" });
+    println!(
+        "[Z-Bot] 截图隐身模式: {}",
+        if enabled { "开启" } else { "关闭" }
+    );
     // Electron: onStealthChange → configStore.patch({ stealthMode })，重启后保持
     if persist {
-        if let Err(e) = store::patch(&store::config_file(), state::default_config(), &json!({ "stealthMode": enabled })) {
+        if let Err(e) = store::patch(
+            &store::config_file(),
+            state::default_config(),
+            &json!({ "stealthMode": enabled }),
+        ) {
             eprintln!("[Z-Bot] 隐身状态写入配置失败: {e}");
         }
     }
@@ -208,13 +219,17 @@ pub fn start_cursor_push(app: &AppHandle) {
         if !w.is_visible().unwrap_or(false) {
             continue;
         }
-        let Some((x, y)) = cursor_position() else { continue };
+        let Some((x, y)) = cursor_position() else {
+            continue;
+        };
         if x == LAST_X.load(Ordering::Relaxed) && y == LAST_Y.load(Ordering::Relaxed) {
             continue; // 鼠标静止不推
         }
         LAST_X.store(x, Ordering::Relaxed);
         LAST_Y.store(y, Ordering::Relaxed);
-        let Ok(pos) = w.outer_position() else { continue };
+        let Ok(pos) = w.outer_position() else {
+            continue;
+        };
         let Ok(size) = w.inner_size() else { continue };
         // 给的是相对窗口中心的偏移，渲染端不用再换算（与 Electron 推送的形状一致）
         let payload = json!({

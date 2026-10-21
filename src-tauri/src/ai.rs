@@ -88,17 +88,73 @@ fn provider(
 /// 内置模板：顺序与 ai-providers.ts:29-95 一致，UI 拿第一个（ollama）当不可删除的默认项
 pub fn builtin_providers() -> Vec<Provider> {
     vec![
-        provider("ollama", "Ollama (本地)", "ollama", "http://localhost:11434", "", &["qwen2.5:7b-instruct-q4_K_M", "llama3.2-vision", "gemma2:9b"], true),
-        provider("openai", "OpenAI", "openai", "https://api.openai.com", "", &["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"], true),
-        provider("deepseek", "DeepSeek", "deepseek", "https://api.deepseek.com", "", &["deepseek-chat", "deepseek-reasoner"], false),
-        provider("qwen", "通义千问", "qwen", "https://dashscope.aliyuncs.com/compatible-mode", "", &["qwen-plus", "qwen-turbo", "qwen-vl-plus"], true),
-        provider("claude", "Claude", "claude", "https://api.anthropic.com", "", &["claude-sonnet-4-20250514", "claude-3-5-haiku-20241022"], true),
-        provider("gemini", "Gemini", "gemini", "https://generativelanguage.googleapis.com", "", &["gemini-2.0-flash", "gemini-1.5-pro"], true),
+        provider(
+            "ollama",
+            "Ollama (本地)",
+            "ollama",
+            "http://localhost:11434",
+            "",
+            &["qwen2.5:7b-instruct-q4_K_M", "llama3.2-vision", "gemma2:9b"],
+            true,
+        ),
+        provider(
+            "openai",
+            "OpenAI",
+            "openai",
+            "https://api.openai.com",
+            "",
+            &["gpt-4o", "gpt-4o-mini", "gpt-4-turbo"],
+            true,
+        ),
+        provider(
+            "deepseek",
+            "DeepSeek",
+            "deepseek",
+            "https://api.deepseek.com",
+            "",
+            &["deepseek-chat", "deepseek-reasoner"],
+            false,
+        ),
+        provider(
+            "qwen",
+            "通义千问",
+            "qwen",
+            "https://dashscope.aliyuncs.com/compatible-mode",
+            "",
+            &["qwen-plus", "qwen-turbo", "qwen-vl-plus"],
+            true,
+        ),
+        provider(
+            "claude",
+            "Claude",
+            "claude",
+            "https://api.anthropic.com",
+            "",
+            &["claude-sonnet-4-20250514", "claude-3-5-haiku-20241022"],
+            true,
+        ),
+        provider(
+            "gemini",
+            "Gemini",
+            "gemini",
+            "https://generativelanguage.googleapis.com",
+            "",
+            &["gemini-2.0-flash", "gemini-1.5-pro"],
+            true,
+        ),
         // MiniMax 开放平台（2026-10-20 加）。OpenAI 兼容协议，
         // base_url **不带 /v1** —— 本仓拼的是 `{base_url}/v1/chat/completions`
         // 与 `{base_url}/v1/models`，带了 /v1 会拼出 /v1/v1/...。
         // 模型清单取自 2026-10-20 实测 `GET https://api.minimaxi.com/v1/models` 返回的 9 个。
-        provider("minimax", "MiniMax", "minimax", "https://api.minimaxi.com", "", &["MiniMax-M3.1-Flash", "MiniMax-M3", "MiniMax-M2.7"], true),
+        provider(
+            "minimax",
+            "MiniMax",
+            "minimax",
+            "https://api.minimaxi.com",
+            "",
+            &["MiniMax-M3.1-Flash", "MiniMax-M3", "MiniMax-M2.7"],
+            true,
+        ),
     ]
 }
 
@@ -120,7 +176,10 @@ pub fn provider_from_config(cfg: &Value) -> Provider {
         }
     }
     let field = |key: &str| -> String {
-        cfg.get(key).and_then(|v| v.as_str()).unwrap_or("").to_string()
+        cfg.get(key)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
     };
     if let Some(builtin) = find_builtin(ai_provider) {
         let base_url = or_default(field("aiBaseUrl"), builtin.base_url.clone());
@@ -130,7 +189,12 @@ pub fn provider_from_config(cfg: &Value) -> Provider {
         if !ai_model.is_empty() {
             models.insert(0, ai_model);
         }
-        return Provider { base_url, api_key, models, ..builtin };
+        return Provider {
+            base_url,
+            api_key,
+            models,
+            ..builtin
+        };
     }
     let ollama = find_builtin("ollama").expect("内置提供商表不可为空");
     let mut fallback = ollama;
@@ -142,7 +206,11 @@ pub fn provider_from_config(cfg: &Value) -> Provider {
 }
 
 fn or_default(value: String, def: String) -> String {
-    if value.is_empty() { def } else { value }
+    if value.is_empty() {
+        def
+    } else {
+        value
+    }
 }
 
 /// 模型三级优先：request.model → config.aiModel → config.modelName（ai-router.ts:261）
@@ -171,7 +239,10 @@ fn is_openai_compatible(ptype: &str) -> bool {
 /// 流式路径下 claude/gemini 不收 tool_use（Electron 也没收），所以带工具的回合不能流式
 pub fn can_stream_tools(ptype: &str) -> bool {
     // minimax 同 deepseek / qwen：OpenAI 兼容 ⇒ 支持流式与 tools
-    matches!(ptype, "ollama" | "openai" | "deepseek" | "qwen" | "custom" | "minimax")
+    matches!(
+        ptype,
+        "ollama" | "openai" | "deepseek" | "qwen" | "custom" | "minimax"
+    )
 }
 
 fn client(total: Option<Duration>) -> reqwest::Client {
@@ -179,8 +250,7 @@ fn client(total: Option<Duration>) -> reqwest::Client {
     if let Some(t) = total {
         b = b.timeout(t);
     }
-    b.build()
-        .unwrap_or_else(|_| reqwest::Client::new())
+    b.build().unwrap_or_else(|_| reqwest::Client::new())
 }
 
 async fn body_error(label: &str, resp: reqwest::Response) -> String {
@@ -195,7 +265,9 @@ fn ollama_messages(req: &ChatRequest) -> Vec<Value> {
     req.messages
         .iter()
         .map(|m| match m.images.as_deref() {
-            Some(imgs) if !imgs.is_empty() => json!({ "role": m.role, "content": m.content, "images": imgs }),
+            Some(imgs) if !imgs.is_empty() => {
+                json!({ "role": m.role, "content": m.content, "images": imgs })
+            }
             _ => json!({ "role": m.role, "content": m.content }),
         })
         .collect()
@@ -231,7 +303,11 @@ fn claude_messages(req: &ChatRequest) -> Vec<Value> {
         .iter()
         .filter(|m| !(m.role == "system"))
         .map(|m| {
-            let role = if m.role == "assistant" { "assistant" } else { "user" };
+            let role = if m.role == "assistant" {
+                "assistant"
+            } else {
+                "user"
+            };
             let content = match m.images.as_deref() {
                 Some(imgs) if !imgs.is_empty() => {
                     let mut parts = vec![json!({ "type": "text", "text": m.content })];
@@ -256,7 +332,11 @@ fn gemini_contents(req: &ChatRequest) -> Vec<Value> {
         .iter()
         .filter(|m| m.role != "system")
         .map(|m| {
-            let role = if m.role == "assistant" { "model" } else { "user" };
+            let role = if m.role == "assistant" {
+                "model"
+            } else {
+                "user"
+            };
             let mut parts = vec![json!({ "text": m.content })];
             for img in m.images.as_deref().unwrap_or_default() {
                 let data = img.split(',').next_back().unwrap_or(img);
@@ -389,7 +469,9 @@ pub async fn chat(provider: &Provider, request: &ChatRequest) -> Result<ChatResp
                     .and_then(|c| c.as_str())
                     .unwrap_or("")
                     .to_string(),
-                tool_calls: openai_tool_calls(data.get("message").and_then(|m| m.get("tool_calls"))),
+                tool_calls: openai_tool_calls(
+                    data.get("message").and_then(|m| m.get("tool_calls")),
+                ),
             })
         }
         t if is_openai_compatible(t) => {
@@ -448,12 +530,20 @@ pub async fn chat(provider: &Provider, request: &ChatRequest) -> Result<ChatResp
                     blocks
                         .iter()
                         .filter(|b| b.get("type").and_then(|t| t.as_str()) == Some("text"))
-                        .map(|b| b.get("text").and_then(|t| t.as_str()).unwrap_or("").to_string())
+                        .map(|b| {
+                            b.get("text")
+                                .and_then(|t| t.as_str())
+                                .unwrap_or("")
+                                .to_string()
+                        })
                         .collect::<Vec<_>>()
                         .join("")
                 })
                 .unwrap_or_default();
-            Ok(ChatResponse { content: text, tool_calls: claude_tool_blocks(&data) })
+            Ok(ChatResponse {
+                content: text,
+                tool_calls: claude_tool_blocks(&data),
+            })
         }
         "gemini" => {
             let mut body = json!({ "contents": gemini_contents(request) });
@@ -488,10 +578,18 @@ pub async fn chat(provider: &Provider, request: &ChatRequest) -> Result<ChatResp
                 .unwrap_or_default();
             let text = parts
                 .iter()
-                .map(|p| p.get("text").and_then(|t| t.as_str()).unwrap_or("").to_string())
+                .map(|p| {
+                    p.get("text")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or("")
+                        .to_string()
+                })
                 .collect::<Vec<_>>()
                 .join("");
-            Ok(ChatResponse { content: text, tool_calls: gemini_function_calls(&data) })
+            Ok(ChatResponse {
+                content: text,
+                tool_calls: gemini_function_calls(&data),
+            })
         }
         other => Err(format!("不支持的提供商类型: {other}")),
     }
@@ -503,7 +601,11 @@ pub async fn chat(provider: &Provider, request: &ChatRequest) -> Result<ChatResp
 fn drain_lines(pending: &mut String, text: &str) -> Vec<String> {
     pending.push_str(text);
     let ended_with_newline = pending.ends_with('\n');
-    let mut lines: Vec<String> = pending.split('\n').map(|l| l.to_string()).filter(|l| !l.trim().is_empty()).collect();
+    let mut lines: Vec<String> = pending
+        .split('\n')
+        .map(|l| l.to_string())
+        .filter(|l| !l.trim().is_empty())
+        .collect();
     pending.clear();
     if !ended_with_newline {
         if let Some(last) = lines.pop() {
@@ -586,15 +688,23 @@ pub async fn stream_chat(
             let mut tool_calls: Option<Vec<Value>> = None;
             let mut err: Option<String> = None;
             let mut on_line = |line: &str| -> Result<(), String> {
-                let Ok(data) = serde_json::from_str::<Value>(line) else { return Ok(()) };
+                let Ok(data) = serde_json::from_str::<Value>(line) else {
+                    return Ok(());
+                };
                 let message = data.get("message");
-                if let Some(c) = message.and_then(|m| m.get("content")).and_then(|c| c.as_str()) {
+                if let Some(c) = message
+                    .and_then(|m| m.get("content"))
+                    .and_then(|c| c.as_str())
+                {
                     if !c.is_empty() {
                         full.push_str(c);
                         emit(sse_payload(c, false));
                     }
                 }
-                if let Some(calls) = message.and_then(|m| m.get("tool_calls")).and_then(|c| c.as_array()) {
+                if let Some(calls) = message
+                    .and_then(|m| m.get("tool_calls"))
+                    .and_then(|c| c.as_array())
+                {
                     if !calls.is_empty() {
                         tool_calls = Some(calls.clone());
                     }
@@ -607,10 +717,16 @@ pub async fn stream_chat(
             if let Err(e) = stream_lines(resp, "Ollama", &mut on_line).await {
                 err = Some(e);
             }
-            drop(on_line);
+            // 原来这里有一句 `drop(on_line);`，用意是「先把闭包放掉，再借用它捕获的
+            // &mut」。但闭包**不实现 Drop** ⇒ drop() 对它只是移动一次，
+            // 而借用（borrow）本来就由 NLL 在**最后一次使用**处结束 ——
+            // 闭包后面再没用过 ⇒ 那句 drop 是多余的（clippy: drop_non_drop）。
             match err {
                 Some(e) => Err(e),
-                None => Ok(ChatResponse { content: full, tool_calls }),
+                None => Ok(ChatResponse {
+                    content: full,
+                    tool_calls,
+                }),
             }
         }
         t if is_openai_compatible(t) => {
@@ -621,7 +737,11 @@ pub async fn stream_chat(
             if !provider.api_key.is_empty() {
                 builder = builder.bearer_auth(&provider.api_key);
             }
-            let resp = builder.json(&body).send().await.map_err(|e| e.to_string())?;
+            let resp = builder
+                .json(&body)
+                .send()
+                .await
+                .map_err(|e| e.to_string())?;
             if !resp.status().is_success() {
                 return Err(body_error("OpenAI兼容 流式", resp).await);
             }
@@ -631,22 +751,32 @@ pub async fn stream_chat(
             let mut err: Option<String> = None;
             let mut on_line = |line: &str| -> Result<(), String> {
                 let trimmed = line.trim();
-                let Some(rest) = trimmed.strip_prefix("data:") else { return Ok(()) };
+                let Some(rest) = trimmed.strip_prefix("data:") else {
+                    return Ok(());
+                };
                 let data_str = rest.trim();
                 if data_str == "[DONE]" {
                     emit(sse_payload("", true));
                     return Ok(());
                 }
-                let Ok(data) = serde_json::from_str::<Value>(data_str) else { return Ok(()) };
+                let Ok(data) = serde_json::from_str::<Value>(data_str) else {
+                    return Ok(());
+                };
                 let choice = data.get("choices").and_then(|c| c.get(0));
                 let delta = choice.and_then(|c| c.get("delta"));
-                if let Some(text) = delta.and_then(|d| d.get("content")).and_then(|c| c.as_str()) {
+                if let Some(text) = delta
+                    .and_then(|d| d.get("content"))
+                    .and_then(|c| c.as_str())
+                {
                     if !text.is_empty() {
                         full.push_str(text);
                         emit(sse_payload(text, false));
                     }
                 }
-                if let Some(deltas) = delta.and_then(|d| d.get("tool_calls")).and_then(|t| t.as_array()) {
+                if let Some(deltas) = delta
+                    .and_then(|d| d.get("tool_calls"))
+                    .and_then(|t| t.as_array())
+                {
                     for t in deltas {
                         let i = t.get("index").and_then(|x| x.as_u64()).unwrap_or(0) as usize;
                         partial.resize(i + 1, None);
@@ -661,8 +791,13 @@ pub async fn stream_chat(
                             let acc = slot["function"]["name"].as_str().unwrap_or("").to_string();
                             slot["function"]["name"] = json!(acc + name);
                         }
-                        if let Some(args) = f.and_then(|f| f.get("arguments")).and_then(|a| a.as_str()) {
-                            let acc = slot["function"]["arguments"].as_str().unwrap_or("").to_string();
+                        if let Some(args) =
+                            f.and_then(|f| f.get("arguments")).and_then(|a| a.as_str())
+                        {
+                            let acc = slot["function"]["arguments"]
+                                .as_str()
+                                .unwrap_or("")
+                                .to_string();
                             slot["function"]["arguments"] = json!(acc + args);
                         }
                         partial[i] = Some(slot);
@@ -673,7 +808,10 @@ pub async fn stream_chat(
             if let Err(e) = stream_lines(resp, "OpenAI兼容 流式", &mut on_line).await {
                 err = Some(e);
             }
-            drop(on_line);
+            // 原来这里有一句 `drop(on_line);`，用意是「先把闭包放掉，再借用它捕获的
+            // &mut」。但闭包**不实现 Drop** ⇒ drop() 对它只是移动一次，
+            // 而借用（borrow）本来就由 NLL 在**最后一次使用**处结束 ——
+            // 闭包后面再没用过 ⇒ 那句 drop 是多余的（clippy: drop_non_drop）。
             match err {
                 Some(e) => Err(e),
                 None => {
@@ -707,14 +845,22 @@ pub async fn stream_chat(
             let mut err: Option<String> = None;
             let mut on_line = |line: &str| -> Result<(), String> {
                 let trimmed = line.trim();
-                let Some(rest) = trimmed.strip_prefix("data:") else { return Ok(()) };
+                let Some(rest) = trimmed.strip_prefix("data:") else {
+                    return Ok(());
+                };
                 let data_str = rest.trim();
                 if data_str == "[DONE]" || data_str.is_empty() {
                     return Ok(());
                 }
-                let Ok(data) = serde_json::from_str::<Value>(data_str) else { return Ok(()) };
+                let Ok(data) = serde_json::from_str::<Value>(data_str) else {
+                    return Ok(());
+                };
                 if data.get("type").and_then(|t| t.as_str()) == Some("content_block_delta") {
-                    if let Some(text) = data.get("delta").and_then(|d| d.get("text")).and_then(|t| t.as_str()) {
+                    if let Some(text) = data
+                        .get("delta")
+                        .and_then(|d| d.get("text"))
+                        .and_then(|t| t.as_str())
+                    {
                         full.push_str(text);
                         emit(sse_payload(text, false));
                     }
@@ -726,10 +872,16 @@ pub async fn stream_chat(
             if let Err(e) = stream_lines(resp, "Claude 流式", &mut on_line).await {
                 err = Some(e);
             }
-            drop(on_line);
+            // 原来这里有一句 `drop(on_line);`，用意是「先把闭包放掉，再借用它捕获的
+            // &mut」。但闭包**不实现 Drop** ⇒ drop() 对它只是移动一次，
+            // 而借用（borrow）本来就由 NLL 在**最后一次使用**处结束 ——
+            // 闭包后面再没用过 ⇒ 那句 drop 是多余的（clippy: drop_non_drop）。
             match err {
                 Some(e) => Err(e),
-                None => Ok(ChatResponse { content: full, tool_calls: None }),
+                None => Ok(ChatResponse {
+                    content: full,
+                    tool_calls: None,
+                }),
             }
         }
         "gemini" => {
@@ -755,8 +907,12 @@ pub async fn stream_chat(
             let mut err: Option<String> = None;
             let mut on_line = |line: &str| -> Result<(), String> {
                 let trimmed = line.trim();
-                let Some(rest) = trimmed.strip_prefix("data:") else { return Ok(()) };
-                let Ok(data) = serde_json::from_str::<Value>(rest.trim()) else { return Ok(()) };
+                let Some(rest) = trimmed.strip_prefix("data:") else {
+                    return Ok(());
+                };
+                let Ok(data) = serde_json::from_str::<Value>(rest.trim()) else {
+                    return Ok(());
+                };
                 let parts = data
                     .get("candidates")
                     .and_then(|c| c.get(0))
@@ -778,13 +934,19 @@ pub async fn stream_chat(
             if let Err(e) = stream_lines(resp, "Gemini 流式", &mut on_line).await {
                 err = Some(e);
             }
-            drop(on_line);
+            // 原来这里有一句 `drop(on_line);`，用意是「先把闭包放掉，再借用它捕获的
+            // &mut」。但闭包**不实现 Drop** ⇒ drop() 对它只是移动一次，
+            // 而借用（borrow）本来就由 NLL 在**最后一次使用**处结束 ——
+            // 闭包后面再没用过 ⇒ 那句 drop 是多余的（clippy: drop_non_drop）。
             match err {
                 // gemini 不发 done 帧，收尾由这里补
                 Some(e) => Err(e),
                 None => {
                     emit(sse_payload("", true));
-                    Ok(ChatResponse { content: full, tool_calls: None })
+                    Ok(ChatResponse {
+                        content: full,
+                        tool_calls: None,
+                    })
                 }
             }
         }
@@ -798,8 +960,12 @@ pub async fn test_connection(provider: &Provider) -> Value {
     let probe = |timeout_secs: u64| client(Some(Duration::from_secs(timeout_secs)));
     let result: Result<bool, String> = match provider.ptype.as_str() {
         "ollama" => {
-            let resp = probe(5).get(format!("{}/api/tags", provider.base_url)).send().await;
-            resp.map(|r| r.status().is_success()).map_err(|e| e.to_string())
+            let resp = probe(5)
+                .get(format!("{}/api/tags", provider.base_url))
+                .send()
+                .await;
+            resp.map(|r| r.status().is_success())
+                .map_err(|e| e.to_string())
         }
         t if is_openai_compatible(t) => {
             let mut req = probe(5)
@@ -808,11 +974,18 @@ pub async fn test_connection(provider: &Provider) -> Value {
             if !provider.api_key.is_empty() {
                 req = req.bearer_auth(&provider.api_key);
             }
-            req.send().await.map(|r| r.status().is_success()).map_err(|e| e.to_string())
+            req.send()
+                .await
+                .map(|r| r.status().is_success())
+                .map_err(|e| e.to_string())
         }
         "claude" => {
             // 模型名不对也说明连得上，所以 5xx 才算失败（Electron 同款判断）
-            let model = provider.models.first().cloned().unwrap_or_else(|| "claude-3-5-haiku-20241022".to_string());
+            let model = provider
+                .models
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "claude-3-5-haiku-20241022".to_string());
             let body = json!({ "model": model, "max_tokens": 1, "messages": [{ "role": "user", "content": "hi" }] });
             let resp = probe(10)
                 .post(format!("{}/v1/messages", provider.base_url))
@@ -823,18 +996,29 @@ pub async fn test_connection(provider: &Provider) -> Value {
                 .json(&body)
                 .send()
                 .await;
-            resp.map(|r| (r.status().as_u16()) < 500).map_err(|e| e.to_string())
+            resp.map(|r| (r.status().as_u16()) < 500)
+                .map_err(|e| e.to_string())
         }
         "gemini" => {
-            let url = format!("{}/v1beta/models?key={}", provider.base_url, provider.api_key);
-            probe(5).get(url).send().await.map(|r| r.status().is_success()).map_err(|e| e.to_string())
+            let url = format!(
+                "{}/v1beta/models?key={}",
+                provider.base_url, provider.api_key
+            );
+            probe(5)
+                .get(url)
+                .send()
+                .await
+                .map(|r| r.status().is_success())
+                .map_err(|e| e.to_string())
         }
         other => Err(format!("不支持的提供商类型: {other}")),
     };
     match result {
         Ok(true) => json!({ "success": true }),
         Ok(false) => json!({ "success": false, "error": "HTTP 请求未通过" }),
-        Err(e) => json!({ "success": false, "error": if e.is_empty() { "连接超时".to_string() } else { e } }),
+        Err(e) => {
+            json!({ "success": false, "error": if e.is_empty() { "连接超时".to_string() } else { e } })
+        }
     }
 }
 
@@ -851,13 +1035,18 @@ pub async fn get_models(provider: &Provider) -> Vec<String> {
             if !provider.api_key.is_empty() {
                 req = req.bearer_auth(&provider.api_key);
             }
-            get_json(req).await.map(|data| names_from(&data, "data", &["id"], None))
+            get_json(req)
+                .await
+                .map(|data| names_from(&data, "data", &["id"], None))
         }
         // Claude 没有公开的模型列表 API
         "claude" => Some(fallback.clone()),
-        "gemini" => get_json(http.get(format!("{}/v1beta/models?key={}", provider.base_url, provider.api_key)))
-            .await
-            .map(|data| names_from(&data, "models", &["name"], Some(&"models/"))),
+        "gemini" => get_json(http.get(format!(
+            "{}/v1beta/models?key={}",
+            provider.base_url, provider.api_key
+        )))
+        .await
+        .map(|data| names_from(&data, "models", &["name"], Some("models/"))),
         _ => None,
     };
     match fetched {
@@ -887,7 +1076,11 @@ fn names_from(data: &Value, key: &str, name_keys: &[&str], prefix: Option<&str>)
             name_keys
                 .iter()
                 .find_map(|k| m.get(*k).and_then(|v| v.as_str()))
-                .map(|s| s.strip_prefix(prefix.unwrap_or("")).unwrap_or(s).to_string())
+                .map(|s| {
+                    s.strip_prefix(prefix.unwrap_or(""))
+                        .unwrap_or(s)
+                        .to_string()
+                })
         })
         .collect();
     if prefix.is_some() {
@@ -945,8 +1138,8 @@ mod tests {
         };
         let base = std::env::var("MINIMAX_BASE_URL")
             .unwrap_or_else(|_| "https://api.minimaxi.com".to_string());
-        let model = std::env::var("MINIMAX_MODEL")
-            .unwrap_or_else(|_| "MiniMax-M3.1-Flash".to_string());
+        let model =
+            std::env::var("MINIMAX_MODEL").unwrap_or_else(|_| "MiniMax-M3.1-Flash".to_string());
         let p = Provider {
             id: "minimax".into(),
             name: "MiniMax".into(),
@@ -970,6 +1163,9 @@ mod tests {
         };
         let resp = chat(&p, &req).await.expect("真实调用应成功");
         assert!(!resp.content.is_empty(), "返回内容为空");
-        eprintln!("[LIVE] minimax 真实调用成功：{}", resp.content.chars().take(40).collect::<String>());
+        eprintln!(
+            "[LIVE] minimax 真实调用成功：{}",
+            resp.content.chars().take(40).collect::<String>()
+        );
     }
 }

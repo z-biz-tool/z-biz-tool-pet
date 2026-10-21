@@ -19,16 +19,80 @@ fn now_ms() -> u128 {
 }
 
 /// (id, 名称, body, bodyLight, bodyDark, blush, accent)
-type Preset = (&'static str, &'static str, &'static str, &'static str, &'static str, &'static str, &'static str);
+type Preset = (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+);
 
 const PRESETS: &[Preset] = &[
-    ("default-purple", "默认紫", "#722ed1", "#b794f6", "#531dab", "rgba(255, 105, 180, 0.5)", "#722ed1"),
-    ("forest-green", "森林绿", "#237804", "#52c41a", "#135200", "rgba(250, 173, 20, 0.4)", "#52c41a"),
-    ("ocean-blue", "海洋蓝", "#003a8c", "#1890ff", "#002766", "rgba(255, 105, 180, 0.4)", "#1890ff"),
-    ("sakura-pink", "樱花粉", "#9e1068", "#eb2f96", "#6e0f4e", "rgba(255, 182, 193, 0.6)", "#eb2f96"),
-    ("lava-red", "岩浆红", "#820014", "#ff4d4f", "#5c0011", "rgba(255, 182, 193, 0.5)", "#ff4d4f"),
-    ("galaxy-gray", "银河灰", "#434343", "#bfbfbf", "#1f1f1f", "rgba(114, 46, 209, 0.4)", "#bfbfbf"),
-    ("golden", "金色", "#ad6800", "#faad14", "#874d00", "rgba(255, 105, 180, 0.4)", "#faad14"),
+    (
+        "default-purple",
+        "默认紫",
+        "#722ed1",
+        "#b794f6",
+        "#531dab",
+        "rgba(255, 105, 180, 0.5)",
+        "#722ed1",
+    ),
+    (
+        "forest-green",
+        "森林绿",
+        "#237804",
+        "#52c41a",
+        "#135200",
+        "rgba(250, 173, 20, 0.4)",
+        "#52c41a",
+    ),
+    (
+        "ocean-blue",
+        "海洋蓝",
+        "#003a8c",
+        "#1890ff",
+        "#002766",
+        "rgba(255, 105, 180, 0.4)",
+        "#1890ff",
+    ),
+    (
+        "sakura-pink",
+        "樱花粉",
+        "#9e1068",
+        "#eb2f96",
+        "#6e0f4e",
+        "rgba(255, 182, 193, 0.6)",
+        "#eb2f96",
+    ),
+    (
+        "lava-red",
+        "岩浆红",
+        "#820014",
+        "#ff4d4f",
+        "#5c0011",
+        "rgba(255, 182, 193, 0.5)",
+        "#ff4d4f",
+    ),
+    (
+        "galaxy-gray",
+        "银河灰",
+        "#434343",
+        "#bfbfbf",
+        "#1f1f1f",
+        "rgba(114, 46, 209, 0.4)",
+        "#bfbfbf",
+    ),
+    (
+        "golden",
+        "金色",
+        "#ad6800",
+        "#faad14",
+        "#874d00",
+        "rgba(255, 105, 180, 0.4)",
+        "#faad14",
+    ),
 ];
 
 fn preset_skin(p: &Preset) -> Value {
@@ -119,8 +183,14 @@ mod tests {
         let skins = pet_get_skins().as_array().expect("必须是数组").clone();
         assert_eq!(skins.len(), 7, "预设皮肤数量变了老用户的收藏就对不上 id");
         assert_eq!(skins[0]["colors"]["body"], json!("#722ed1"));
-        assert_eq!(skins[0]["colors"]["blush"], json!("rgba(255, 105, 180, 0.5)"));
-        assert_eq!(skins[3]["colors"]["blush"], json!("rgba(255, 182, 193, 0.6)"));
+        assert_eq!(
+            skins[0]["colors"]["blush"],
+            json!("rgba(255, 105, 180, 0.5)")
+        );
+        assert_eq!(
+            skins[3]["colors"]["blush"],
+            json!("rgba(255, 182, 193, 0.6)")
+        );
         assert_eq!(skins[6]["id"], json!("golden"));
         for skin in &skins {
             assert_eq!(skin["colors"]["eye"], json!(EYE), "{skin}");
@@ -135,7 +205,11 @@ mod tests {
             "colors": { "body": "#111111", "bodyLight": "#333333", "bodyDark": "#000000" },
         }));
         assert_eq!(skin["name"], json!("AI生成皮肤"));
-        assert_eq!(skin["colors"]["accent"], json!("#111111"), "缺 accent 要退到 body");
+        assert_eq!(
+            skin["colors"]["accent"],
+            json!("#111111"),
+            "缺 accent 要退到 body"
+        );
         assert_eq!(skin["colors"]["eye"], json!(EYE));
         assert_eq!(skin["colors"]["blush"], json!(DEFAULT_BLUSH));
         assert_eq!(skin["isCustom"], json!(true));

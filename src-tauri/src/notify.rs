@@ -8,13 +8,7 @@ use tauri::AppHandle;
 use tauri_plugin_notification::NotificationExt;
 
 pub fn notify(app: &AppHandle, title: &str, body: &str) {
-    if let Err(e) = app
-        .notification()
-        .builder()
-        .title(title)
-        .body(body)
-        .show()
-    {
+    if let Err(e) = app.notification().builder().title(title).body(body).show() {
         // 通知发不出去（Windows 需要 Toast AppUserModelID / 系统关了通知权限）不能影响主流程
         eprintln!("[Z-Bot] 系统通知发送失败: {e}");
     }

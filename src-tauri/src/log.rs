@@ -78,7 +78,10 @@ mod tests {
         append_server_log("STT", "x"); // 大写不在白名单
         append_server_log("", "x");
         let logs = store::log_dir();
-        let outside = std::path::Path::new(&dir).parent().unwrap().join("escape.log");
+        let outside = std::path::Path::new(&dir)
+            .parent()
+            .unwrap()
+            .join("escape.log");
         assert!(!outside.exists(), "日志名里的 .. 必须被拒绝");
         assert!(!logs.join("STT.log").exists());
         assert!(!logs.join(".log").exists());
@@ -96,7 +99,10 @@ mod tests {
         let text = std::fs::read_to_string(store::log_dir().join("stt.log")).unwrap();
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines.len(), 2);
-        assert!(lines[0].starts_with('[') && lines[0].contains("] loading model"), "{lines:?}");
+        assert!(
+            lines[0].starts_with('[') && lines[0].contains("] loading model"),
+            "{lines:?}"
+        );
         assert!(lines[1].contains("ready"));
         let _ = std::fs::remove_dir_all(&dir);
         std::env::remove_var("ZBOT_DATA_DIR");
@@ -112,7 +118,10 @@ mod tests {
         std::fs::write(&path, "x".repeat(MAX_LOG_BYTES as usize + 1)).unwrap();
         append_server_log("tts", "after rotate");
         assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 1);
-        assert!(store::log_dir().join("tts.log.1").exists(), "超限应滚出一份历史");
+        assert!(
+            store::log_dir().join("tts.log.1").exists(),
+            "超限应滚出一份历史"
+        );
         let _ = std::fs::remove_dir_all(&dir);
         std::env::remove_var("ZBOT_DATA_DIR");
     }

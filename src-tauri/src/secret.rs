@@ -103,10 +103,7 @@ fn save_map(map: &serde_json::Map<String, Value>) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(
-            secrets_path(),
-            std::fs::Permissions::from_mode(0o600),
-        );
+        let _ = std::fs::set_permissions(secrets_path(), std::fs::Permissions::from_mode(0o600));
     }
     Ok(())
 }
@@ -151,7 +148,8 @@ mod tests {
     use super::*;
 
     fn isolated(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("z-bot-secret-{}-{}", tag, uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("z-bot-secret-{}-{}", tag, uuid::Uuid::new_v4()));
         std::env::set_var("ZBOT_DATA_DIR", &dir);
         dir
     }

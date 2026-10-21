@@ -174,7 +174,10 @@ pub fn apply_from_config_with_notice(app: &AppHandle) {
     if failed.is_empty() {
         return;
     }
-    eprintln!("[Z-Bot Main] 以下快捷键注册失败（被占用或格式非法）: {}", failed.join(", "));
+    eprintln!(
+        "[Z-Bot Main] 以下快捷键注册失败（被占用或格式非法）: {}",
+        failed.join(", ")
+    );
     crate::notify::notify(
         app,
         "部分全局快捷键未生效",
@@ -215,10 +218,7 @@ pub fn shortcuts_update(app: AppHandle, overrides: Value) -> Value {
 
 /// Electron: getShortcuts() —— 设置面板按这个形状回显
 pub fn list() -> Vec<Value> {
-    let applied = applied_map()
-        .lock()
-        .map(|m| m.clone())
-        .unwrap_or_default();
+    let applied = applied_map().lock().map(|m| m.clone()).unwrap_or_default();
     let registered = registered_map()
         .lock()
         .map(|m| m.clone())

@@ -128,7 +128,12 @@ where
     let name = whisper_bin_name();
     // 打包后 Resources 里不放二进制，只有开发态能命中源码树里的 whisper.cpp 构建产物
     if cfg!(debug_assertions) {
-        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("whisper.cpp").join("build").join("bin").join(name);
+        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("whisper.cpp")
+            .join("build")
+            .join("bin")
+            .join(name);
         if manifest.is_file() {
             return manifest;
         }
@@ -156,7 +161,9 @@ fn whisper_bin() -> PathBuf {
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
         .collect();
-    let exe_dir = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf()));
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
     resolve_whisper_bin(|k| std::env::var(k).ok(), &dirs, exe_dir.as_deref())
 }
 
@@ -167,7 +174,9 @@ pub fn whisper_model_path(cfg: &Value) -> PathBuf {
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .unwrap_or("base");
-    store::data_dir().join("models").join(format!("ggml-{model}.bin"))
+    store::data_dir()
+        .join("models")
+        .join(format!("ggml-{model}.bin"))
 }
 
 /// 缺 bin / 缺模型时的原因文本，与 stt.js 的 missingWhisper 同形
@@ -226,7 +235,10 @@ pub async fn transcribe(audio_b64: &str, budget: Duration) -> Result<String, Str
             // webm 必须靠 ffmpeg 转成 16k wav；坏掉/缺失时给出可定位的原因
             let hint = if e.contains("Library not loaded") || e.to_lowercase().contains("dyld") {
                 "ffmpeg 安装已损坏（动态库缺失），需重装 ffmpeg，否则语音输入与会议转录不可用"
-            } else if e.contains("program not found") || e.contains("系统找不到指定") || e.contains("No such file") {
+            } else if e.contains("program not found")
+                || e.contains("系统找不到指定")
+                || e.contains("No such file")
+            {
                 "ffmpeg 不可用，无法转换音频"
             } else {
                 "ffmpeg 转码失败"
@@ -283,7 +295,10 @@ fn powershell_script(text_file: &str, out_file: &str, speed: f64) -> String {
     }
     lines.extend([
         format!("$s.SetOutputToWaveFile({})", ps_quote(out_file)),
-        format!("$t = Get-Content -Raw -Encoding UTF8 {}", ps_quote(text_file)),
+        format!(
+            "$t = Get-Content -Raw -Encoding UTF8 {}",
+            ps_quote(text_file)
+        ),
         "if ([string]::IsNullOrWhiteSpace($t)) { throw \"文本读取为空\" }".to_string(),
         "$s.Speak($t)".to_string(),
         "$s.Dispose()".to_string(),
@@ -292,7 +307,11 @@ fn powershell_script(text_file: &str, out_file: &str, speed: f64) -> String {
 }
 
 /// 合成 → 尝试统一转 mp3，ffmpeg 不可用就原样返回。返回 (base64, format)
-pub async fn speak(text: &str, voice: Option<&str>, raw_speed: f64) -> Result<(String, String), String> {
+pub async fn speak(
+    text: &str,
+    voice: Option<&str>,
+    raw_speed: f64,
+) -> Result<(String, String), String> {
     if text.trim().is_empty() {
         return Err("No text provided".to_string());
     }
@@ -304,7 +323,16 @@ pub async fn speak(text: &str, voice: Option<&str>, raw_speed: f64) -> Result<(S
     let mp3 = TempFile::new("tts", "mp3");
     let conv = run_captured(
         "ffmpeg",
-        &["-i", &synth.text(), "-codec:a", "libmp3lame", "-q:a", "4", &mp3.text(), "-y"],
+        &[
+            "-i",
+            &synth.text(),
+            "-codec:a",
+            "libmp3lame",
+            "-q:a",
+            "4",
+            &mp3.text(),
+            "-y",
+        ],
         FFMPEG_BUDGET,
     )
     .await;
@@ -358,7 +386,9 @@ async fn synthesize_windows(text: &str, speed: f64) -> Result<TempFile, String> 
     let size = out.path().metadata().map(|m| m.len()).unwrap_or(0);
     // 阈值留够余量，宁肯报错也不回一段静音
     if size <= MIN_TTS_BYTES {
-        return Err(format!("powershell 产出 {size} B，不足 {MIN_TTS_BYTES} B，按静音失败处理"));
+        return Err(format!(
+            "powershell 产出 {size} B，不足 {MIN_TTS_BYTES} B，按静音失败处理"
+        ));
     }
     Ok(out)
 }
@@ -370,8 +400,12 @@ async fn synthesize_mac(text: &str, voice: Option<&str>, speed: f64) -> Result<T
     let picked = match voice {
         Some(v) if !v.is_empty() => Some(v.to_string()),
         _ => {
-            let probe = run_captured("say", &["-v", "?"], Duration::from_secs(5)).await.unwrap_or_default();
-            ZH.iter().find(|v| probe.contains(**v)).map(|v| v.to_string())
+            let probe = run_captured("say", &["-v", "?"], Duration::from_secs(5))
+                .await
+                .unwrap_or_default();
+            ZH.iter()
+                .find(|v| probe.contains(**v))
+                .map(|v| v.to_string())
         }
     };
     let mut args: Vec<String> = Vec::new();
@@ -383,16 +417,28 @@ async fn synthesize_mac(text: &str, voice: Option<&str>, speed: f64) -> Result<T
     }
     args.extend(["-o".to_string(), out.text(), text.to_string()]);
     let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    run_captured("say", &refs, TTS_BUDGET).await.map_err(|e| format!("say 失败: {}", tail(&e, 300)))?;
+    run_captured("say", &refs, TTS_BUDGET)
+        .await
+        .map_err(|e| format!("say 失败: {}", tail(&e, 300)))?;
     Ok(out)
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 async fn synthesize_linux(text: &str, speed: f64) -> Result<TempFile, String> {
     let out = TempFile::new("tts", "wav");
-    if std::process::Command::new("espeak-ng").arg("--help").output().is_ok() {
+    if std::process::Command::new("espeak-ng")
+        .arg("--help")
+        .output()
+        .is_ok()
+    {
         let args: Vec<String> = if speed != 1.0 {
-            vec!["-s".into(), (175.0 * speed).round().to_string(), "-w".into(), out.text(), text.into()]
+            vec![
+                "-s".into(),
+                (175.0 * speed).round().to_string(),
+                "-w".into(),
+                out.text(),
+                text.into(),
+            ]
         } else {
             vec!["-w".into(), out.text(), text.into()]
         };
@@ -523,7 +569,10 @@ mod tests {
     fn base64_decoding_is_as_lenient_as_buffer_from() {
         let raw = "hello 中文!";
         let enc = B64.encode(raw.as_bytes());
-        assert!(enc.ends_with("=="), "样本必须带 padding，否则缺 padding 那条断言是空的");
+        assert!(
+            enc.ends_with("=="),
+            "样本必须带 padding，否则缺 padding 那条断言是空的"
+        );
         assert_eq!(decode_audio_b64(&enc).unwrap(), raw.as_bytes());
         // 缺 padding 与夹带换行都要能吃下（Buffer.from 就是这么宽松）
         let unpadded = enc.trim_end_matches('=');
@@ -541,7 +590,7 @@ mod tests {
         wav[..4].copy_from_slice(b"RIFF");
         wav[8..12].copy_from_slice(b"WAVE");
         assert!(is_wav(&wav));
-        assert!(!is_wav(&wav[..12].to_vec()), "刚好 12 字节不算 wav");
+        assert!(!is_wav(&wav[..12]), "刚好 12 字节不算 wav");
         let mut only_riff = wav.clone();
         only_riff[8..12].copy_from_slice(b"XXXX");
         assert!(!is_wav(&only_riff));
@@ -579,7 +628,17 @@ mod tests {
     #[test]
     fn whisper_binary_prefers_env_then_bundled_then_path() {
         let dirs = vec!["/tmp/nope".to_string(), "/usr/local/bin".to_string()];
-        let got = resolve_whisper_bin(|k| if k == "ZBOT_WHISPER_BIN" { Some("  /opt/w  ".to_string()) } else { None }, &dirs, None);
+        let got = resolve_whisper_bin(
+            |k| {
+                if k == "ZBOT_WHISPER_BIN" {
+                    Some("  /opt/w  ".to_string())
+                } else {
+                    None
+                }
+            },
+            &dirs,
+            None,
+        );
         assert_eq!(got, PathBuf::from("  /opt/w  "), "环境变量优先级最高");
 
         // 空白值等于没设，不能让 PATH 扫描被跳过
@@ -601,10 +660,21 @@ mod tests {
         assert_eq!(p.file_name().unwrap(), "ggml-small.bin");
         // 只有「空串/缺字段」才回退 base —— Electron 写的是 `sttModel || 'base'`，
         // 空白串是真值会原样用下去。这里保持同形，不做额外的 trim（改了就和旧配置不一致）
-        for cfg in [json!({ "sttModel": "" }), json!({}), json!({ "sttModel": null })] {
-            assert_eq!(whisper_model_path(&cfg).file_name().unwrap(), "ggml-base.bin", "{cfg}");
+        for cfg in [
+            json!({ "sttModel": "" }),
+            json!({}),
+            json!({ "sttModel": null }),
+        ] {
+            assert_eq!(
+                whisper_model_path(&cfg).file_name().unwrap(),
+                "ggml-base.bin",
+                "{cfg}"
+            );
         }
-        assert!(p.starts_with(store::data_dir()), "模型必须留在 ~/.z-bot/models 里");
+        assert!(
+            p.starts_with(store::data_dir()),
+            "模型必须留在 ~/.z-bot/models 里"
+        );
     }
 
     #[test]
@@ -629,10 +699,19 @@ mod tests {
     #[tokio::test]
     #[ignore]
     async fn real_engine_produces_audible_audio() {
-        let (audio, format) = speak("你好，我是萌宠", None, 1.0).await.expect("本机引擎合成失败");
+        let (audio, format) = speak("你好，我是萌宠", None, 1.0)
+            .await
+            .expect("本机引擎合成失败");
         let bytes = B64.decode(audio.as_bytes()).expect("返回的不是合法 base64");
-        assert!(bytes.len() > MIN_TTS_BYTES as usize, "只有 {len} B，多半是静音", len = bytes.len());
-        assert!(["mp3", "wav", "aiff"].contains(&format.as_str()), "未知格式 {format}");
+        assert!(
+            bytes.len() > MIN_TTS_BYTES as usize,
+            "只有 {len} B，多半是静音",
+            len = bytes.len()
+        );
+        assert!(
+            ["mp3", "wav", "aiff"].contains(&format.as_str()),
+            "未知格式 {format}"
+        );
     }
 
     /// 真机冒烟：whisper 未安装时必须给出可定位的原因，而不是空字符串成功
@@ -642,7 +721,11 @@ mod tests {
         let r = transcribe("aGVsbG8=", STT_BUDGET).await;
         match r {
             Ok(text) => println!("whisper 可用，识别结果: {text:?}"),
-            Err(e) => assert!(!e.is_empty() && (e.contains("whisper") || e.contains("ffmpeg") || e.contains("音频")), "{e}"),
+            Err(e) => assert!(
+                !e.is_empty()
+                    && (e.contains("whisper") || e.contains("ffmpeg") || e.contains("音频")),
+                "{e}"
+            ),
         }
     }
 }

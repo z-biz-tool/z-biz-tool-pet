@@ -28,17 +28,63 @@ pub struct ToolMeta {
 
 /// 顺序即 tools:list 与发给模型的 tools 数组顺序，不要重排
 pub const TOOLS: [ToolMeta; 11] = [
-    ToolMeta { name: "web_search", description: "搜索网页，获取搜索结果摘要。输入搜索关键词，返回相关结果。", requires_confirmation: true },
-    ToolMeta { name: "read_url", description: "读取URL网页内容，提取纯文本。输入URL地址，返回页面文本内容。", requires_confirmation: true },
-    ToolMeta { name: "get_weather", description: "获取指定城市的天气信息。输入城市名称（中文或英文），返回当前天气状况。", requires_confirmation: false },
-    ToolMeta { name: "get_datetime", description: "获取当前日期和时间信息。", requires_confirmation: false },
-    ToolMeta { name: "set_reminder", description: "设置提醒，在指定分钟后发送系统通知。参数: message(提醒内容), delayMinutes(延迟分钟数)", requires_confirmation: true },
-    ToolMeta { name: "open_app", description: "打开应用程序。macOS使用应用名称打开。此操作需要用户确认。", requires_confirmation: true },
-    ToolMeta { name: "execute_command", description: "执行终端命令。此操作需要用户确认，请谨慎使用。", requires_confirmation: true },
-    ToolMeta { name: "control_pet", description: "控制桌面宠物的动画和行为。可触发动画(dance/roll/jump/wave/sleep)或改变皮肤颜色。", requires_confirmation: false },
-    ToolMeta { name: "screenshot_analyze", description: "截取屏幕截图并分析内容。截图后发送给视觉语言模型进行分析。", requires_confirmation: true },
-    ToolMeta { name: "clipboard_read", description: "读取系统剪贴板内容。", requires_confirmation: true },
-    ToolMeta { name: "clipboard_write", description: "写入内容到系统剪贴板。此操作需要用户确认。", requires_confirmation: true },
+    ToolMeta {
+        name: "web_search",
+        description: "搜索网页，获取搜索结果摘要。输入搜索关键词，返回相关结果。",
+        requires_confirmation: true,
+    },
+    ToolMeta {
+        name: "read_url",
+        description: "读取URL网页内容，提取纯文本。输入URL地址，返回页面文本内容。",
+        requires_confirmation: true,
+    },
+    ToolMeta {
+        name: "get_weather",
+        description: "获取指定城市的天气信息。输入城市名称（中文或英文），返回当前天气状况。",
+        requires_confirmation: false,
+    },
+    ToolMeta {
+        name: "get_datetime",
+        description: "获取当前日期和时间信息。",
+        requires_confirmation: false,
+    },
+    ToolMeta {
+        name: "set_reminder",
+        description:
+            "设置提醒，在指定分钟后发送系统通知。参数: message(提醒内容), delayMinutes(延迟分钟数)",
+        requires_confirmation: true,
+    },
+    ToolMeta {
+        name: "open_app",
+        description: "打开应用程序。macOS使用应用名称打开。此操作需要用户确认。",
+        requires_confirmation: true,
+    },
+    ToolMeta {
+        name: "execute_command",
+        description: "执行终端命令。此操作需要用户确认，请谨慎使用。",
+        requires_confirmation: true,
+    },
+    ToolMeta {
+        name: "control_pet",
+        description:
+            "控制桌面宠物的动画和行为。可触发动画(dance/roll/jump/wave/sleep)或改变皮肤颜色。",
+        requires_confirmation: false,
+    },
+    ToolMeta {
+        name: "screenshot_analyze",
+        description: "截取屏幕截图并分析内容。截图后发送给视觉语言模型进行分析。",
+        requires_confirmation: true,
+    },
+    ToolMeta {
+        name: "clipboard_read",
+        description: "读取系统剪贴板内容。",
+        requires_confirmation: true,
+    },
+    ToolMeta {
+        name: "clipboard_write",
+        description: "写入内容到系统剪贴板。此操作需要用户确认。",
+        requires_confirmation: true,
+    },
 ];
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -51,18 +97,32 @@ pub struct ToolResult {
 
 impl ToolResult {
     pub(crate) fn ok(tool_call_id: &str, result: impl Into<String>) -> Self {
-        Self { tool_call_id: tool_call_id.to_string(), result: result.into(), is_error: false }
+        Self {
+            tool_call_id: tool_call_id.to_string(),
+            result: result.into(),
+            is_error: false,
+        }
     }
     pub(crate) fn err(tool_call_id: &str, result: impl Into<String>) -> Self {
-        Self { tool_call_id: tool_call_id.to_string(), result: result.into(), is_error: true }
+        Self {
+            tool_call_id: tool_call_id.to_string(),
+            result: result.into(),
+            is_error: true,
+        }
     }
 }
 
 fn parameters(name: &str) -> Value {
     match name {
-        "web_search" => json!({ "type": "object", "properties": { "query": { "type": "string", "description": "搜索关键词" } }, "required": ["query"] }),
-        "read_url" => json!({ "type": "object", "properties": { "url": { "type": "string", "description": "要读取的URL地址" } }, "required": ["url"] }),
-        "get_weather" => json!({ "type": "object", "properties": { "city": { "type": "string", "description": "城市名称，如\"北京\"或\"Beijing\"" } }, "required": ["city"] }),
+        "web_search" => {
+            json!({ "type": "object", "properties": { "query": { "type": "string", "description": "搜索关键词" } }, "required": ["query"] })
+        }
+        "read_url" => {
+            json!({ "type": "object", "properties": { "url": { "type": "string", "description": "要读取的URL地址" } }, "required": ["url"] })
+        }
+        "get_weather" => {
+            json!({ "type": "object", "properties": { "city": { "type": "string", "description": "城市名称，如\"北京\"或\"Beijing\"" } }, "required": ["city"] })
+        }
         "get_datetime" => json!({ "type": "object", "properties": {} }),
         "set_reminder" => json!({
             "type": "object",
@@ -72,8 +132,12 @@ fn parameters(name: &str) -> Value {
             },
             "required": ["message", "delayMinutes"]
         }),
-        "open_app" => json!({ "type": "object", "properties": { "appName": { "type": "string", "description": "应用名称，如\"Safari\"、\"微信\"、\"Finder\"" } }, "required": ["appName"] }),
-        "execute_command" => json!({ "type": "object", "properties": { "command": { "type": "string", "description": "要执行的命令" } }, "required": ["command"] }),
+        "open_app" => {
+            json!({ "type": "object", "properties": { "appName": { "type": "string", "description": "应用名称，如\"Safari\"、\"微信\"、\"Finder\"" } }, "required": ["appName"] })
+        }
+        "execute_command" => {
+            json!({ "type": "object", "properties": { "command": { "type": "string", "description": "要执行的命令" } }, "required": ["command"] })
+        }
         "control_pet" => json!({
             "type": "object",
             "properties": {
@@ -82,9 +146,13 @@ fn parameters(name: &str) -> Value {
             },
             "required": ["action"]
         }),
-        "screenshot_analyze" => json!({ "type": "object", "properties": { "question": { "type": "string", "description": "想让模型分析什么" } }, "required": ["question"] }),
+        "screenshot_analyze" => {
+            json!({ "type": "object", "properties": { "question": { "type": "string", "description": "想让模型分析什么" } }, "required": ["question"] })
+        }
         "clipboard_read" => json!({ "type": "object", "properties": {} }),
-        "clipboard_write" => json!({ "type": "object", "properties": { "text": { "type": "string", "description": "要写入剪贴板的文本" } }, "required": ["text"] }),
+        "clipboard_write" => {
+            json!({ "type": "object", "properties": { "text": { "type": "string", "description": "要写入剪贴板的文本" } }, "required": ["text"] })
+        }
         _ => json!({ "type": "object", "properties": {} }),
     }
 }
@@ -106,11 +174,19 @@ pub fn tool_list() -> Vec<Value> {
 }
 
 pub fn tool_requires_confirmation(name: &str) -> bool {
-    TOOLS.iter().find(|t| t.name == name).map(|t| t.requires_confirmation).unwrap_or(true)
+    TOOLS
+        .iter()
+        .find(|t| t.name == name)
+        .map(|t| t.requires_confirmation)
+        .unwrap_or(true)
 }
 
 fn param_str(params: &Value, key: &str) -> String {
-    params.get(key).and_then(|v| v.as_str()).unwrap_or("").to_string()
+    params
+        .get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string()
 }
 
 fn clip_chars(text: &str, max: usize) -> String {
@@ -142,7 +218,11 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// 带超时的子进程输出。windowsHide 在 Rust 侧对应 CREATE_NO_WINDOW。
 /// voice.rs 的 whisper/ffmpeg/PowerShell 也走这一个入口（超时与 CREATE_NO_WINDOW 语义一致）
-pub(crate) async fn run_captured(program: &str, args: &[&str], timeout: Duration) -> Result<String, String> {
+pub(crate) async fn run_captured(
+    program: &str,
+    args: &[&str],
+    timeout: Duration,
+) -> Result<String, String> {
     let mut cmd = tokio::process::Command::new(program);
     cmd.args(args).stdin(std::process::Stdio::null());
     #[cfg(windows)]
@@ -156,7 +236,10 @@ pub(crate) async fn run_captured(program: &str, args: &[&str], timeout: Duration
     if output.status.success() {
         // 按字符截：按字节切中文输出会踩在非 UTF-8 边界上直接 panic
         if stdout.chars().count() > MAX_COMMAND_OUTPUT {
-            return Ok(format!("{}\n…(输出超过 1MB 已截断)", stdout.chars().take(MAX_COMMAND_OUTPUT).collect::<String>()));
+            return Ok(format!(
+                "{}\n…(输出超过 1MB 已截断)",
+                stdout.chars().take(MAX_COMMAND_OUTPUT).collect::<String>()
+            ));
         }
         return Ok(stdout);
     }
@@ -192,7 +275,10 @@ pub struct FetchCheck {
 }
 
 fn is_blocked_host(host: &str) -> bool {
-    let host = host.trim_start_matches('[').trim_end_matches(']').to_ascii_lowercase();
+    let host = host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_ascii_lowercase();
     if host.is_empty() {
         return true;
     }
@@ -228,10 +314,8 @@ fn is_blocked_host(host: &str) -> bool {
                         }
                     }
                 }
-                192 => {
-                    if octets.get(1).and_then(|v| v.parse::<u32>().ok()) == Some(168) {
-                        return true;
-                    }
+                192 if octets.get(1).and_then(|v| v.parse::<u32>().ok()) == Some(168) => {
+                    return true;
                 }
                 _ => {}
             }
@@ -272,30 +356,62 @@ fn blocked_by_resolution(host: &str) -> Option<bool> {
 pub fn validate_fetch_url(raw: Option<&str>) -> FetchCheck {
     let input = raw.unwrap_or("").trim().to_string();
     if input.is_empty() {
-        return FetchCheck { ok: false, url: None, reason: Some("缺少 url 参数".into()) };
+        return FetchCheck {
+            ok: false,
+            url: None,
+            reason: Some("缺少 url 参数".into()),
+        };
     }
     let parsed = match url::Url::parse(&input) {
         Ok(u) => u,
-        Err(_) => return FetchCheck { ok: false, url: None, reason: Some("url 格式非法".into()) },
+        Err(_) => {
+            return FetchCheck {
+                ok: false,
+                url: None,
+                reason: Some("url 格式非法".into()),
+            }
+        }
     };
     if parsed.scheme() != "http" && parsed.scheme() != "https" {
-        return FetchCheck { ok: false, url: None, reason: Some("只允许 http/https".into()) };
+        return FetchCheck {
+            ok: false,
+            url: None,
+            reason: Some("只允许 http/https".into()),
+        };
     }
     let host = parsed.host_str().unwrap_or("").to_ascii_lowercase();
     if is_blocked_host(&host) {
-        return FetchCheck { ok: false, url: None, reason: Some("禁止访问内网/环回地址".into()) };
+        return FetchCheck {
+            ok: false,
+            url: None,
+            reason: Some("禁止访问内网/环回地址".into()),
+        };
     }
     // 字面 IP 不必解析；域名要解析，否则 rebinding 能绕过字符串规则
     if host.parse::<std::net::IpAddr>().is_err() {
         match blocked_by_resolution(&host) {
             Some(true) => {
-                return FetchCheck { ok: false, url: None, reason: Some("禁止访问内网/环回地址".into()) }
+                return FetchCheck {
+                    ok: false,
+                    url: None,
+                    reason: Some("禁止访问内网/环回地址".into()),
+                }
             }
-            None => return FetchCheck { ok: false, url: None, reason: Some("域名解析失败".into()) },
+            None => {
+                return FetchCheck {
+                    ok: false,
+                    url: None,
+                    reason: Some("域名解析失败".into()),
+                }
+            }
             Some(false) => {}
         }
     }
-    FetchCheck { ok: true, url: Some(parsed.to_string()), reason: None }
+    FetchCheck {
+        ok: true,
+        url: Some(parsed.to_string()),
+        reason: None,
+    }
 }
 
 fn strip_html(html: &str) -> String {
@@ -366,7 +482,12 @@ async fn read_url(params: &Value) -> String {
     if !check.ok {
         return format!("读取URL失败: {}", check.reason.unwrap_or_default());
     }
-    match http_get(check.url.as_deref().unwrap_or_default(), Duration::from_secs(15)).await {
+    match http_get(
+        check.url.as_deref().unwrap_or_default(),
+        Duration::from_secs(15),
+    )
+    .await
+    {
         Ok(html) => {
             let text = strip_html(&html);
             if text.is_empty() {
@@ -408,7 +529,11 @@ async fn get_weather(params: &Value) -> String {
             };
             let desc = {
                 let zh = field(&["lang_zh", "0", "value"]);
-                if zh.is_empty() { field(&["weatherDesc", "0", "value"]) } else { zh }
+                if zh.is_empty() {
+                    field(&["weatherDesc", "0", "value"])
+                } else {
+                    zh
+                }
             };
             format!(
                 "天气: {}\n温度: {}°C (体感 {}°C)\n湿度: {}%\n风速: {} km/h {}",
@@ -445,7 +570,10 @@ fn get_datetime() -> String {
 /// 这里同样只做进程内定时器（用 async sleep），但重启后不会"复活"是刻意保持一致的行为。
 fn set_reminder(app: &AppHandle, params: &Value) -> String {
     let message = param_str(params, "message");
-    let raw = params.get("delayMinutes").and_then(|v| v.as_f64()).unwrap_or(f64::NAN);
+    let raw = params
+        .get("delayMinutes")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(f64::NAN);
     let minutes = if raw.is_finite() { raw.max(1.0) } else { 1.0 };
     let echo = params
         .get("delayMinutes")
@@ -470,7 +598,17 @@ async fn open_app(params: &Value) -> String {
         ("open", vec!["-a".to_string(), name.clone()])
     } else if cfg!(windows) {
         // start 的空标题参数不能省，否则第一个引号参数会被当成窗口标题吃掉
-        ("cmd", vec!["/d".into(), "/s".into(), "/c".into(), "start".into(), "\"\"".into(), name.clone()])
+        (
+            "cmd",
+            vec![
+                "/d".into(),
+                "/s".into(),
+                "/c".into(),
+                "start".into(),
+                "\"\"".into(),
+                name.clone(),
+            ],
+        )
     } else {
         ("xdg-open", vec![name.clone()])
     };
@@ -550,9 +688,11 @@ async fn screenshot_analyze(params: &Value) -> String {
         return "当前AI引擎不支持视觉分析，请切换到支持Vision的模型".to_string();
     }
     let request = ai::ChatRequest {
-        messages: vec![
-            ai::Message { role: "user".into(), content: question, images: Some(vec![image_base64]) },
-        ],
+        messages: vec![ai::Message {
+            role: "user".into(),
+            content: question,
+            images: Some(vec![image_base64]),
+        }],
         model: ai::resolve_model("", &cfg, &provider),
         stream: Some(false),
         tools: None,
@@ -593,8 +733,17 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                "web_search", "read_url", "get_weather", "get_datetime", "set_reminder", "open_app",
-                "execute_command", "control_pet", "screenshot_analyze", "clipboard_read", "clipboard_write"
+                "web_search",
+                "read_url",
+                "get_weather",
+                "get_datetime",
+                "set_reminder",
+                "open_app",
+                "execute_command",
+                "control_pet",
+                "screenshot_analyze",
+                "clipboard_read",
+                "clipboard_write"
             ]
         );
         // 免确认的只有这三个，其余一律要过确认弹窗
@@ -602,7 +751,10 @@ mod tests {
             assert!(!tool_requires_confirmation(free), "{free} 不该要确认");
         }
         assert!(tool_requires_confirmation("execute_command"));
-        assert!(tool_requires_confirmation("不存在的工具"), "未知工具默认要确认");
+        assert!(
+            tool_requires_confirmation("不存在的工具"),
+            "未知工具默认要确认"
+        );
         assert_eq!(tool_definitions().len(), 11);
         assert_eq!(tool_list().len(), 11);
     }
@@ -612,8 +764,17 @@ mod tests {
         for def in tool_definitions() {
             let func = def.get("function").expect("function 字段");
             let schema = func.get("parameters").expect("parameters 字段");
-            assert_eq!(schema["type"], json!("object"), "{} 的 schema 形状不对", func["name"]);
-            assert!(schema.get("properties").is_some(), "{} 必须带 properties", func["name"]);
+            assert_eq!(
+                schema["type"],
+                json!("object"),
+                "{} 的 schema 形状不对",
+                func["name"]
+            );
+            assert!(
+                schema.get("properties").is_some(),
+                "{} 必须带 properties",
+                func["name"]
+            );
             assert_eq!(def["type"], json!("function"));
         }
     }
@@ -634,14 +795,24 @@ mod tests {
         ] {
             let check = validate_fetch_url(Some(bad));
             assert!(!check.ok, "{bad} 必须被挡住");
-            assert_eq!(check.reason.as_deref(), Some("禁止访问内网/环回地址"), "{bad}");
+            assert_eq!(
+                check.reason.as_deref(),
+                Some("禁止访问内网/环回地址"),
+                "{bad}"
+            );
         }
         // 非 http/https 走的是另一条拒绝理由
         let file = validate_fetch_url(Some("file:///C:/windows/win.ini"));
         assert!(!file.ok);
         assert_eq!(file.reason.as_deref(), Some("只允许 http/https"));
-        assert_eq!(validate_fetch_url(None).reason.as_deref(), Some("缺少 url 参数"));
-        assert_eq!(validate_fetch_url(Some("不是 url")).reason.as_deref(), Some("url 格式非法"));
+        assert_eq!(
+            validate_fetch_url(None).reason.as_deref(),
+            Some("缺少 url 参数")
+        );
+        assert_eq!(
+            validate_fetch_url(Some("不是 url")).reason.as_deref(),
+            Some("url 格式非法")
+        );
     }
 
     #[test]
@@ -649,9 +820,15 @@ mod tests {
         // Electron 的正则写成 `2\\d`，172.20–172.29 整段漏判；这里必须全部拦住
         for second in [16u32, 17, 19, 20, 25, 29, 30, 31] {
             let url = format!("http://172.{second}.1.1/x");
-            assert!(!validate_fetch_url(Some(&url)).ok, "{url} 属于内网段，必须拦住");
+            assert!(
+                !validate_fetch_url(Some(&url)).ok,
+                "{url} 属于内网段，必须拦住"
+            );
         }
-        assert!(validate_fetch_url(Some("http://172.15.1.1/x")).ok, "172.15 是公网段");
+        assert!(
+            validate_fetch_url(Some("http://172.15.1.1/x")).ok,
+            "172.15 是公网段"
+        );
     }
 
     #[test]
@@ -680,7 +857,10 @@ mod tests {
     #[test]
     fn datetime_line_matches_the_electron_format() {
         let line = get_datetime();
-        assert!(line.starts_with("当前时间: "), "前缀变了模型就认不出来: {line}");
+        assert!(
+            line.starts_with("当前时间: "),
+            "前缀变了模型就认不出来: {line}"
+        );
         assert!(line.contains("星期"), "缺星期: {line}");
     }
 }

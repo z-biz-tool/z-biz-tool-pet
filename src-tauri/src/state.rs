@@ -93,7 +93,9 @@ fn clamp_stat(v: f64) -> f64 {
 }
 
 fn parse_iso(s: &str) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(s).ok().map(|d| d.with_timezone(&Utc))
+    DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|d| d.with_timezone(&Utc))
 }
 
 /// 按距上次更新的分钟数衰减，并推 age / 进化阶段（对照 stores.ts decayPetStats）。
@@ -198,7 +200,10 @@ pub fn write_list(file: PathBuf, items: Vec<Value>) {
 }
 
 pub fn load_stats() -> PetStats {
-    let raw = store::read(&pet_stats_file(), serde_json::to_value(PetStats::default()).unwrap());
+    let raw = store::read(
+        &pet_stats_file(),
+        serde_json::to_value(PetStats::default()).unwrap(),
+    );
     serde_json::from_value::<PetStats>(raw).unwrap_or_default()
 }
 
@@ -242,7 +247,10 @@ pub fn config_save(app: tauri::AppHandle, config: Value) -> Value {
         before.get(key).and_then(|v| v.as_str()).unwrap_or("")
             != after.get(key).and_then(|v| v.as_str()).unwrap_or("")
     };
-    let mut applied = Applied { stt_model: None, shortcuts: None };
+    let mut applied = Applied {
+        stt_model: None,
+        shortcuts: None,
+    };
     if changed("sttModel") {
         eprintln!("[Z-Bot] sttModel 已保存，但 whisper 子进程尚未移植（P3），本次不会热切换");
     }
@@ -356,7 +364,9 @@ fn next_pin_id(pins: &[Value]) -> String {
     // 否则第一条（纯毫秒）与第二条（纯毫秒）会撞同一个值。
     let mut max_seq: Option<u32> = None;
     for p in pins {
-        let Some(id) = p.get("id").and_then(|v| v.as_str()) else { continue };
+        let Some(id) = p.get("id").and_then(|v| v.as_str()) else {
+            continue;
+        };
         let (id_head, seq) = match id.split_once('-') {
             Some((h, tail)) => (h, tail.parse::<u32>().unwrap_or(0)),
             None => (id, 0),
@@ -450,10 +460,7 @@ pub fn pet_pet() -> Value {
 pub fn init_runtime_state() {
     let s = decay(load_stats());
     save_stats(&s);
-    println!(
-        "[Z-Bot] 宠物状态已加载, stage: {} age: {}",
-        s.stage, s.age
-    );
+    println!("[Z-Bot] 宠物状态已加载, stage: {} age: {}", s.stage, s.age);
 }
 
 #[cfg(test)]
@@ -461,7 +468,8 @@ mod tests {
     use super::*;
 
     fn isolated(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("z-bot-state-{}-{}", tag, uuid::Uuid::new_v4()));
+        let dir =
+            std::env::temp_dir().join(format!("z-bot-state-{}-{}", tag, uuid::Uuid::new_v4()));
         std::env::set_var("ZBOT_DATA_DIR", &dir);
         dir
     }
@@ -518,8 +526,10 @@ mod tests {
     #[test]
     fn unparsable_timestamp_does_not_kill_the_pet() {
         let _g = crate::lock_test_env();
-        let mut base = PetStats::default();
-        base.last_update = "昨天".into();
+        let base = PetStats {
+            last_update: "昨天".into(),
+            ..Default::default()
+        };
         let s = decay(base);
         assert_eq!(s.hunger, 80.0, "坏时间戳不能触发衰减");
     }
@@ -552,7 +562,11 @@ mod tests {
         assert!(!on_disk.contains("sk-secret"), "config.json 泄漏了明文密钥");
         // write 是全量替换且以写入值为准（Electron 同构），默认值补齐发生在重新读盘时
         store::invalidate(&config_file());
-        assert_eq!(load_config()["aiApiKey"], json!("sk-secret"), "读回必须带密钥");
+        assert_eq!(
+            load_config()["aiApiKey"],
+            json!("sk-secret"),
+            "读回必须带密钥"
+        );
         assert_eq!(load_config()["petName"], json!("小紫"));
         assert_eq!(load_config()["voiceSpeed"], json!(1.0), "缺键由默认值补齐");
         let _ = std::fs::remove_dir_all(&dir);
@@ -566,7 +580,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         store::invalidate(&history_file());
         for i in 0..205 {
-            conversation_add_message(json!({ "id": i.to_string(), "role": "user", "content": "m" }));
+            conversation_add_message(
+                json!({ "id": i.to_string(), "role": "user", "content": "m" }),
+            );
         }
         let h = history_load();
         assert_eq!(h.len(), MAX_HISTORY_LENGTH);

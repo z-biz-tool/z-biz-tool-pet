@@ -197,4 +197,3 @@ pub fn window_stick_to_edge(app: tauri::AppHandle) -> Result<(), String> {
     w.set_position(tauri::PhysicalPosition::new(target_x, target_y))
         .map_err(|e| format!("贴边失败: {e}"))
 }
-

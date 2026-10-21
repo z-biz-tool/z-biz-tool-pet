@@ -37,10 +37,16 @@ pub fn add_long_term_memory(key: &str, content: &str, confidence: i64) {
     let now = store::now_iso();
     {
         let mut mem = entries().lock().expect("记忆表被污染");
-        if let Some(existing) = mem.iter_mut().find(|m| m.get("key").and_then(|v| v.as_str()) == Some(key)) {
+        if let Some(existing) = mem
+            .iter_mut()
+            .find(|m| m.get("key").and_then(|v| v.as_str()) == Some(key))
+        {
             existing["content"] = json!(content);
             existing["updatedAt"] = json!(&now);
-            let prev = existing.get("confidence").and_then(|v| v.as_i64()).unwrap_or(0);
+            let prev = existing
+                .get("confidence")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0);
             existing["confidence"] = json!(prev.max(confidence));
         } else {
             // id 沿用 mem_<毫秒>，与 Electron 生成的旧条目同一格式
@@ -83,10 +89,26 @@ struct Pattern {
 /// 四条模式串与 memory-system.ts 逐字对齐；改一条要同步两边（P4 删 Electron 前）。
 fn patterns() -> Vec<Pattern> {
     vec![
-        Pattern { key: "用户生日", hints: &["生日", "出生日期", "birthday"], source: r"(\d{4}[-年]\d{1,2}[-月]\d{1,2}日?)" },
-        Pattern { key: "用户邮箱", hints: &["邮箱", "email", "@"], source: r"([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})" },
-        Pattern { key: "用户喜好", hints: &["喜欢", "爱", "偏好", "爱好"], source: r"喜欢(的)?(.{1,50})" },
-        Pattern { key: "工作内容", hints: &["工作", "职位", "公司", "职业"], source: r"(在|担任|是)(.{1,30})" },
+        Pattern {
+            key: "用户生日",
+            hints: &["生日", "出生日期", "birthday"],
+            source: r"(\d{4}[-年]\d{1,2}[-月]\d{1,2}日?)",
+        },
+        Pattern {
+            key: "用户邮箱",
+            hints: &["邮箱", "email", "@"],
+            source: r"([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})",
+        },
+        Pattern {
+            key: "用户喜好",
+            hints: &["喜欢", "爱", "偏好", "爱好"],
+            source: r"喜欢(的)?(.{1,50})",
+        },
+        Pattern {
+            key: "工作内容",
+            hints: &["工作", "职位", "公司", "职业"],
+            source: r"(在|担任|是)(.{1,30})",
+        },
     ]
 }
 
@@ -111,7 +133,9 @@ pub fn extract_from_conversation(messages: &[(&str, &str)]) {
             continue;
         }
         // 正则构造失败按"这条不抽"处理：坏模式不该让整次抽取报错
-        let Ok(re) = Regex::new(p.source) else { continue };
+        let Ok(re) = Regex::new(p.source) else {
+            continue;
+        };
         if let Some(m) = re.find(&text) {
             add_long_term_memory(p.key, &take_100(m.as_str()), 90);
         }
@@ -145,7 +169,8 @@ mod tests {
         assert_eq!(birthday["content"], json!("1995-03-07"));
         assert_eq!(birthday["confidence"], json!(90));
         // 落盘必须真的发生（D11 的回归点）
-        let on_disk: Value = serde_json::from_str(&std::fs::read_to_string(memory_file()).unwrap()).unwrap();
+        let on_disk: Value =
+            serde_json::from_str(&std::fs::read_to_string(memory_file()).unwrap()).unwrap();
         assert_eq!(on_disk.as_array().unwrap().len(), got.len());
         let _ = std::fs::remove_dir_all(&dir);
         std::env::remove_var("ZBOT_DATA_DIR");

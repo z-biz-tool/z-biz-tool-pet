@@ -25,8 +25,8 @@ pub enum ToolRisk {
 pub fn risk_level(name: &str) -> ToolRisk {
     match name {
         "get_datetime" | "get_weather" | "control_pet" | "get_pet_stats" => ToolRisk::Safe,
-        "web_search" | "read_url" | "clipboard_read" | "clipboard_write"
-        | "screenshot_analyze" | "set_reminder" => ToolRisk::Sensitive,
+        "web_search" | "read_url" | "clipboard_read" | "clipboard_write" | "screenshot_analyze"
+        | "set_reminder" => ToolRisk::Sensitive,
         // 未知工具按最危险处理 —— 新增工具忘了登记时不能默认放行
         _ => ToolRisk::Dangerous,
     }
@@ -45,10 +45,18 @@ pub struct Guard {
 
 impl Guard {
     fn deny(reason: impl Into<String>) -> Self {
-        Self { allowed: false, reason: Some(reason.into()), resolved: None }
+        Self {
+            allowed: false,
+            reason: Some(reason.into()),
+            resolved: None,
+        }
     }
     fn ok(resolved: impl Into<String>) -> Self {
-        Self { allowed: true, reason: None, resolved: Some(resolved.into()) }
+        Self {
+            allowed: true,
+            reason: None,
+            resolved: Some(resolved.into()),
+        }
     }
 }
 
@@ -100,7 +108,12 @@ pub fn guard_command(command: &str) -> Guard {
 
 /// 人类可读的操作描述，用于确认对话框
 pub fn describe_tool_call(name: &str, args: &Value) -> String {
-    let text = |key: &str| args.get(key).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let text = |key: &str| {
+        args.get(key)
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string()
+    };
     match name {
         "execute_command" => format!("执行系统命令：{}", text("command")),
         "open_app" => format!("打开应用程序：{}", text("appName")),
@@ -109,10 +122,16 @@ pub fn describe_tool_call(name: &str, args: &Value) -> String {
             let head: String = text("text").chars().take(80).collect();
             format!("写入系统剪贴板：{head}")
         }
-        "screenshot_analyze" => "截取当前屏幕并交给 AI 分析（屏幕内容会发送给所配置的 AI 服务）".to_string(),
+        "screenshot_analyze" => {
+            "截取当前屏幕并交给 AI 分析（屏幕内容会发送给所配置的 AI 服务）".to_string()
+        }
         "web_search" => format!("联网搜索：{}（查询内容会发送到外部服务）", text("query")),
         "read_url" => format!("访问网址：{}", text("url")),
-        other => format!("{} {}", other, args.to_string().chars().take(200).collect::<String>()),
+        other => format!(
+            "{} {}",
+            other,
+            args.to_string().chars().take(200).collect::<String>()
+        ),
     }
 }
 
@@ -225,10 +244,27 @@ pub fn guard_app_name(app_name: &str) -> Guard {
     if name.chars().count() > 200 {
         return Guard::deny("应用名过长");
     }
-    if name
-        .chars()
-        .any(|c| matches!(c, ';' | '&' | '|' | '`' | '$' | '(' | ')' | '{' | '}' | '<' | '>' | '\n' | '\r' | '"' | '\'' | '\\' | '/'))
-    {
+    if name.chars().any(|c| {
+        matches!(
+            c,
+            ';' | '&'
+                | '|'
+                | '`'
+                | '$'
+                | '('
+                | ')'
+                | '{'
+                | '}'
+                | '<'
+                | '>'
+                | '\n'
+                | '\r'
+                | '"'
+                | '\''
+                | '\\'
+                | '/'
+        )
+    }) {
         return Guard::deny("应用名包含非法字符");
     }
     Guard::ok(name.to_string())
@@ -281,7 +317,7 @@ mod tests {
         std::fs::create_dir_all(&base).unwrap();
         let inside = base.join("note.txt");
         std::fs::write(&inside, "hi").unwrap();
-        let roots = build_allowed_roots(&[base.clone()]);
+        let roots = build_allowed_roots(std::slice::from_ref(&base));
         let g = guard_read_path(inside.to_str().unwrap(), &roots);
         assert!(g.allowed, "白名单内应放行: {:?}", g.reason);
         // 逃出白名单
@@ -323,7 +359,9 @@ mod tests {
         );
         // 前置条件自检：sibling 的字符串确实以 base 打头，否则这条测试是空转的
         assert!(
-            sibling.to_string_lossy().starts_with(base.to_string_lossy().as_ref()),
+            sibling
+                .to_string_lossy()
+                .starts_with(base.to_string_lossy().as_ref()),
             "前提：sibling 必须与 base 共享前缀，否则测不到前缀陷阱"
         );
         assert!(
@@ -394,7 +432,7 @@ mod tests {
         let link = base.join("link");
         std::os::unix::fs::symlink(&real, &link).unwrap();
 
-        let roots = build_allowed_roots(&[real.clone()]);
+        let roots = build_allowed_roots(std::slice::from_ref(&real));
 
         // 存在的文件：旧实现本来就能过
         let existing = link.join("here.txt");
@@ -407,7 +445,11 @@ mod tests {
         // **不存在的**文件：整条 canonicalize 失败 ⇒ 旧实现在这里误拒
         let missing = link.join("gone.txt");
         let g = guard_read_path(missing.to_str().unwrap(), &roots);
-        assert!(g.allowed, "白名单内、只是文件还不该存在，不该被拒：{:?}", g.reason);
+        assert!(
+            g.allowed,
+            "白名单内、只是文件还不该存在，不该被拒：{:?}",
+            g.reason
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -415,7 +457,15 @@ mod tests {
     #[test]
     fn app_name_rejects_shell_metacharacters() {
         assert!(guard_app_name("notepad").allowed);
-        for bad in ["notepad;rm -r /", "a|b", "a`b", "../etc", "a\\b", "a/b", "a\"b"] {
+        for bad in [
+            "notepad;rm -r /",
+            "a|b",
+            "a`b",
+            "../etc",
+            "a\\b",
+            "a/b",
+            "a\"b",
+        ] {
             assert!(!guard_app_name(bad).allowed, "应拒绝: {bad}");
         }
         assert!(!guard_app_name("").allowed);
