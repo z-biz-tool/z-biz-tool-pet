@@ -22,6 +22,11 @@ const TTS_BUDGET: Duration = Duration::from_secs(60);
 /// 转码/压缩这类辅助进程不给满额，失败要快
 const FFMPEG_BUDGET: Duration = Duration::from_secs(30);
 /// powershell「成功」退出却留下一个只有头的 wav 是实测踩过的坑（64 B）
+// 2026-10-21：Windows-only 的常量与纯逻辑函数在**任何平台都保留**（`cfg(any(windows, test))`），
+// 理由有二：① 它们的单测是跨平台纯逻辑测试（sapi_rate / ps_quote / powershell_script），
+//   不该因为宿主机不是 Windows 就失去覆盖；② 保留在生产构建里会造成 dead_code 警告。
+//   非 Windows 的生产构建用不到它们 ⇒ 用 `cfg(any(windows, test))` 让编译器知道。
+#[cfg(any(windows, test))]
 const MIN_TTS_BYTES: u64 = 1000;
 const MAX_TTS_TEXT: usize = 2000;
 
@@ -89,11 +94,13 @@ pub fn normalize_speed(raw: f64) -> f64 {
 }
 
 /// SAPI 的 Rate 是 -10..10 的对数档位，倍率 1 对应 0（tts.js:116）
+#[cfg(any(windows, test))]
 pub fn sapi_rate(speed: f64) -> i32 {
     (10.0 * speed.log2()).round().clamp(-10.0, 10.0) as i32
 }
 
 /// PowerShell 单引号字面量：内部单引号翻倍
+#[cfg(any(windows, test))]
 pub fn ps_quote(p: &str) -> String {
     format!("'{}'", p.replace('\'', "''"))
 }
@@ -264,6 +271,7 @@ fn tail(s: &str, chars: usize) -> String {
 /// SAPI 走 UTF-8 临时文件而不是 stdin：`-NonInteractive` + 管道 stdin 下
 /// `[Console]::In.ReadToEnd()` 会读到空串，PowerShell 于是"成功"退出并留下一个
 /// 只有头的 wav，上层把静音当成合成成功播了出去（tts.js:152 的注释）。
+#[cfg(any(windows, test))]
 fn powershell_script(text_file: &str, out_file: &str, speed: f64) -> String {
     let mut lines = vec![
         "$ErrorActionPreference='Stop'".to_string(),

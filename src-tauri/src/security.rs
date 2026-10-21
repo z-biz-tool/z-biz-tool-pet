@@ -286,16 +286,52 @@ mod tests {
         assert!(g.allowed, "白名单内应放行: {:?}", g.reason);
         // 逃出白名单
         assert!(!guard_read_path("/etc/passwd", &roots).allowed);
-        // 前缀陷阱：/tmp/xxx-evil 不能算在 /tmp/xxx 之内
-        let sibling = base.join("-evil");
+        assert!(!guard_read_path("", &roots).allowed);
+        assert!(!guard_read_path("a\0b", &roots).allowed);
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// 前缀陷阱：`/tmp/xxx-evil` 不是 `/tmp/xxx` 之内。
+    ///
+    /// 2026-10-21 修的**测试前提错误**（实现本身一直是对的）：
+    /// 旧版把这条断言塞在 `read_guard_is_confined_to_allowed_roots` 里，用的是
+    /// `build_allowed_roots(&[base])` —— 而 `build_allowed_roots` **无条件**把
+    /// `std::env::temp_dir()` 也放进白名单，`base` 与它的 `-evil` 兄弟目录都在 temp_dir 下
+    /// ⇒ 候选路径**合法地**落在另一个白名单根内，被放行是符合设计的
+    /// ⇒ 那条断言**在任何 unix 机器上都必然失败**，从来没真正测到前缀陷阱。
+    ///
+    /// 现在单列成一条，并**只用 `base` 这一个根**（不经过 `build_allowed_roots`），
+    /// 这样才真的咬住 `is_within` 的整段路径比较语义。
+    #[cfg(unix)]
+    #[test]
+    fn read_guard_rejects_same_prefix_sibling_directory() {
+        // 前缀陷阱的关键：**sibling 必须与 base 共享前缀**。
+        // 若两者用不同 uuid 拼出来，前缀本来就不同，裸前缀匹配也会正确拒绝
+        // ⇒ 那样的测试根本咬不住漏洞（反向钉已实测：改成裸前缀匹配仍然绿）。
+        // 这里让 sibling = base 的路径 + "-evil"：字符串上 base 是 sibling 的真前缀。
+        let base = std::env::temp_dir().join(format!("z-bot-prefix-{}", uuid::Uuid::new_v4()));
+        let sibling = PathBuf::from(format!("{}-evil", base.to_string_lossy()));
+        std::fs::create_dir_all(&base).unwrap();
         std::fs::create_dir_all(&sibling).unwrap();
+        // 只放行 base 自己，绕开 build_allowed_roots 无条件加入的 temp_dir
+        let roots = vec![base.clone()];
+        let inside = base.join("note.txt");
+        std::fs::write(&inside, "hi").unwrap();
+        assert!(
+            guard_read_path(inside.to_str().unwrap(), &roots).allowed,
+            "白名单内应放行"
+        );
+        // 前置条件自检：sibling 的字符串确实以 base 打头，否则这条测试是空转的
+        assert!(
+            sibling.to_string_lossy().starts_with(base.to_string_lossy().as_ref()),
+            "前提：sibling 必须与 base 共享前缀，否则测不到前缀陷阱"
+        );
         assert!(
             !guard_read_path(sibling.to_str().unwrap(), &roots).allowed,
             "同前缀但不同目录，不该放行"
         );
-        assert!(!guard_read_path("", &roots).allowed);
-        assert!(!guard_read_path("a\0b", &roots).allowed);
         let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(&sibling);
     }
 
     #[cfg(windows)]

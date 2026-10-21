@@ -123,6 +123,19 @@ function App() {
   petStatsRef.current = petStats;
   const handlePetActionRef = useRef<((action: string) => void) | null>(null);
 
+  // 2026-10-21：下面三个 ref 是为修 ESLint 报的 3 条 `react-hooks/exhaustive-deps`
+  // （缺依赖）而加的**转发层**。原来三处 useCallback 的依赖数组都是 `[]`，
+  // 但回调里用了后面才声明的函数（`triggerAnimation` / `startIdleScheduler` / `spawnHearts`）
+  // ⇒ 闭包捕获的是**首次渲染时**的旧引用。今天这三者的实现都只读 ref、不读 state，
+  // 所以行为上暂时等价；但一旦它们内部改用 state 或 props，闭包就会**静默过期**。
+  //
+  // 修法不用「把函数挪到依赖数组里」（那会连带重跑整条 effect 链），
+  // 而是照本仓既有的 handlePetActionRef 约定做 ref 转发 —— 闭包里读 ref.current，
+  // 永远是最新实现，依赖数组保持 `[]`。
+  const triggerAnimationRef = useRef<((animType: AnimationType, source?: 'user' | 'status' | 'idle') => void) | null>(null);
+  const startIdleSchedulerRef = useRef<(() => void) | null>(null);
+  const spawnHeartsRef = useRef<(() => void) | null>(null);
+
   const refreshStats = useCallback(async () => {
     const stats = await window.electronAPI?.petGetStats();
     if (stats) setPetStats(stats as PetCoreStats);
@@ -137,7 +150,7 @@ function App() {
           setStatus('speaking');
           break;
         case 'animation':
-          triggerAnimation(payload.content as AnimationType, 'user');
+          triggerAnimationRef.current?.(payload.content as AnimationType, 'user');
           break;
         case 'petAction':
           void handlePetActionRef.current?.(payload.content);
@@ -215,7 +228,13 @@ function App() {
   const animationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const blinkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const cursorTrackRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // 2026-10-21 删掉 `cursorTrackRef`：它是 Electron 时代「前端 100ms 轮询取光标位置」
+  // 那条路径的遗留 —— 移植到 Tauri 时实现被删了（依赖的 window.electronAPI.getCursorPosition
+  // 不存在），但 ref 声明与卸载时的 clearInterval 漏删，于是留下一个**永远不会被赋值**的孤儿：
+  //   · clearInterval 那行永远不执行（清不掉任何东西）；
+  //   · ESLint 报 "The ref value 'cursorTrackRef.current' will likely have changed by the
+  //     time this effect cleanup function runs"（它读的是一个从不存在过的定时器句柄）。
+  // 光标跟随功能本身**没有丢**：已改为主进程推送（T3.2 的 applyCursorDelta）。
   const currentAnimRef = useRef<AnimationType>('idle');
   currentAnimRef.current = currentAnimation;
 
@@ -323,7 +342,6 @@ function App() {
       if (animationTimerRef.current) clearTimeout(animationTimerRef.current);
       if (blinkTimerRef.current) clearTimeout(blinkTimerRef.current);
       if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
-      if (cursorTrackRef.current) clearInterval(cursorTrackRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -361,20 +379,24 @@ function App() {
         setAnimationCSS(getAnimationCSS('idle'));
         currentAnimRef.current = 'idle';
         // 重新启动空闲调度
-        startIdleScheduler();
+        startIdleSchedulerRef.current?.();
       }, totalDuration + 50);
     }
   }, []);
+  // ref 转发：让早于本函数声明的闭包（handleTaskAction）也能调到最新实现
+  triggerAnimationRef.current = triggerAnimation;
 
   const startIdleScheduler = useCallback(() => {
     if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
     idleTimerRef.current = setTimeout(() => {
       if (statusRef.current === 'idle' && currentAnimRef.current === 'idle') {
         const randomAnim = getRandomIdleAnimation();
-        triggerAnimation(randomAnim, 'idle');
+        triggerAnimationRef.current?.(randomAnim, 'idle');
       }
     }, getRandomIdleInterval());
-  }, [triggerAnimation]);
+  }, []);
+  // ref 转发：让早于本函数声明的闭包（triggerAnimation 内部）能调到最新实现
+  startIdleSchedulerRef.current = startIdleScheduler;
 
   const startBlinkTimer = useCallback(() => {
     if (blinkTimerRef.current) clearTimeout(blinkTimerRef.current);
@@ -699,6 +721,8 @@ function App() {
     setHearts([Date.now(), Date.now() + 100, Date.now() + 200]);
     setTimeout(() => setHearts([]), 2000);
   }, []);
+  // ref 转发：让早于本函数声明的闭包（handlePetAction）能调到最新实现
+  spawnHeartsRef.current = spawnHearts;
 
   const handleDoubleClick = () => {
     if (status !== 'idle') return;
@@ -729,7 +753,7 @@ function App() {
       setPetStats(stats as PetCoreStats);
       setCurrentEmotion(resolveEmotion(stats as PetCoreStats));
     }
-    if (action === 'play' || action === 'pet') spawnHearts();
+    if (action === 'play' || action === 'pet') spawnHeartsRef.current?.();
   }, []);
   handlePetActionRef.current = handlePetAction;
 

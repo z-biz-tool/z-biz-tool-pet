@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Drawer, Form, Input, InputNumber, Button, Divider, Select, message, Space, Typography, Card, Tag, Popconfirm } from 'antd';
 import { SaveOutlined, ReloadOutlined, DeleteOutlined, ApiOutlined, CheckCircleOutlined, CloseCircleOutlined, LoadingOutlined, EyeOutlined } from '@ant-design/icons';
 import { DEFAULT_CONFIG, SCENE_PROMPTS } from '../shared/prompts';
@@ -72,9 +72,17 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose, onSave }) 
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
 
+  // 2026-10-21：ref 转发层，修 ESLint 报的 "useEffect has a missing dependency: 'loadConfig'"。
+  // 原来 `loadConfig` 是本文件里**普通函数**（不是 useCallback），且定义在调用它的
+  // effect **之后**（effect 在 76 行，定义在 154 行）⇒ effect 闭包捕获的是**首次渲染**的
+  // 那份函数实例。今天它只依赖稳定的 `form` 与 setter，行为上等价；
+  // 但一旦它内部用上随渲染变化的 state/props，闭包就会**静默过期**。
+  // 修法与 App.tsx 同款：闭包里读 ref.current（永远是最新实现），依赖数组不动。
+  const loadConfigRef = useRef<(() => void) | null>(null);
+
   useEffect(() => {
     if (open) {
-      loadConfig();
+      loadConfigRef.current?.();
     }
   }, [open]);
 
@@ -181,6 +189,8 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose, onSave }) 
       setLoading(false);
     }
   };
+  // ref 转发：让 76 行的 effect 能调到最新实现
+  loadConfigRef.current = loadConfig;
 
   const handleSave = async () => {
     try {

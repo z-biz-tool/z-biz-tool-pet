@@ -43,6 +43,16 @@ tauri-plugin-autostart = "2"
 # 截图隐身（SetWindowDisplayAffinity）与鼠标推送（GetCursorPos）只能直调 Win32；
 # 本仓库是组织里第一个用 windows crate 的产品。版本跟 tauri 2.12 对齐（0.62），
 # 否则 win.hwnd() 返回的 HWND 与本地 HWND 是两个不同类型，得手工转指针。
+#
+# 2026-10-21 改成 **target 条件依赖**：截图/隐身/鼠标全是 Win32 专有能力，
+# 而上游 `windows-future 0.3.2` 的 `async_spawn.rs` **无条件**调用
+# `windows_threading::submit`，而 `windows-threading` 整个 crate 是 `#![cfg(windows)]`
+# ⇒ 在 macOS / Linux 上编译 pet 必然报
+#   error[E0425]: cannot find function `submit` in crate `windows_threading`
+# （windows-future 0.2.1 / 0.3.0 / 0.3.1 都有这个缺陷，不是本仓引入的版本问题。）
+# 加了 target 条件后，非 Windows 平台根本不编这个 crate —— 既绕过上游缺陷，
+# 也顺带不再让 macOS / Linux 的开发者白等一次 windows 栈的编译。
+[target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
   "Win32_Foundation",
   "Win32_UI_WindowsAndMessaging",

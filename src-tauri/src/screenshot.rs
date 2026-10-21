@@ -6,34 +6,63 @@
 //! 刻意改进的一点：桌面Capturer 返回的是 1920x1080 拉伸缩略图，这里按比例缩到 1920x1080
 //! 以内 —— 2K/4K 屏原图发给视觉模型既慢又贵，拉长变形反而更糟。
 
-use std::ffi::c_void;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+// c_void / Mutex / OnceLock 只被 Windows 侧的窗口枚举用（`collect_window` 的
+// HWND↔isize 转换与静态枚举表），非 Windows 上没有调用者 ⇒ 条件化避免未使用警告。
+#[cfg(windows)]
+use std::ffi::c_void;
+#[cfg(windows)]
+use std::sync::{Mutex, OnceLock};
+
 use data_encoding::BASE64;
+// image 的编码器与像素类型只被 `encode_jpeg` 用，而它的唯一生产调用者
+// 是 Windows 的 `capture_into` ⇒ 非 Windows 生产构建里用不到（见下方 cfg 说明）。
+#[cfg(any(windows, test))]
 use image::codecs::jpeg::JpegEncoder;
+#[cfg(any(windows, test))]
 use image::{ExtendedColorType, ImageBuffer, Rgb};
 use serde_json::{json, Value};
+
+use crate::{ai, state};
+
 // windows 0.62 把 BOOL 挪到了 windows_core，Win32::Foundation 只留 HWND/LPARAM/RECT
+//
+// 2026-10-21：这些 import 与它们的下游（GDI 截图 / 窗口枚举）现在整体受 `#[cfg(windows)]` 约束。
+// 起因是上游 `windows-future 0.3.2` 的 `async_spawn.rs` **无条件**调用
+// `windows_threading::submit`，而 `windows-threading` 整个 crate 是 `#![cfg(windows)]`
+// ⇒ 非 Windows 平台编译 pet 必然报 `cannot find function 'submit' in crate 'windows_threading'`。
+// 配合 Cargo.toml 把 `windows` 改成 `[target.'cfg(windows)'.dependencies]`，非 Windows 平台
+// 根本不会编这个 crate，这里也就不该看到它的类型。
+#[cfg(windows)]
 use windows::core::BOOL;
+#[cfg(windows)]
 use windows::Win32::Foundation::{HWND, LPARAM, RECT};
+#[cfg(windows)]
 use windows::Win32::Graphics::Gdi::{
     BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDIBits, GetDC,
     GetWindowDC, ReleaseDC, SelectObject, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, HDC,
     HGDIOBJ, SRCCOPY,
 };
+#[cfg(windows)]
 use windows::Win32::Storage::Xps::{PrintWindow, PRINT_WINDOW_FLAGS};
+#[cfg(windows)]
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetSystemMetrics, GetWindowTextW, GetWindowRect, IsWindowVisible,
     PW_RENDERFULLCONTENT, SM_CXSCREEN, SM_CYSCREEN,
 };
 
-use crate::{ai, state};
-
+// 2026-10-21：JPEG 质量与最长边是**跨平台纯常量** —— 编码逻辑 `encode_jpeg` 本身
+// 与 Win32 无关（只依赖 image crate），且有跨平台单测覆盖。
+// 但它们的**唯一生产调用者**是 Windows 的 `capture_into` ⇒ 非 Windows 的生产构建
+// 会把它们判成 dead_code。用 `cfg(any(windows, test))` 兼顾两侧：
+// 测试在任何平台都跑（覆盖率不丢），非 Windows 生产构建不产生死代码。
+#[cfg(any(windows, test))]
 const JPEG_QUALITY: u8 = 80;
 const THROTTLE: Duration = Duration::from_millis(5_000);
+#[cfg(any(windows, test))]
 const MAX_EDGE: usize = 1920;
 const KEEP_HOURS: u64 = 24;
 
@@ -64,6 +93,7 @@ fn reset_throttle() {
 }
 
 /// 内存位图 → JPEG。paint 负责把 src_dc 的内容画进这张位图。
+#[cfg(windows)]
 unsafe fn capture_into(
     src_dc: HDC,
     width: i32,
@@ -114,11 +144,13 @@ unsafe fn capture_into(
 /// 缩到最长边不超过 MAX_EDGE；不需要缩就返回 1.0。
 /// 比例是 MAX_EDGE 除以实际边长 —— 写反了会得到 ≥1 的"放大"倍数，min(1.0) 之后恒为 1，
 /// 于是 4K 屏整张原样送进模型（Electron 靠 thumbnailSize 天然避开了这个坑）。
+#[cfg(any(windows, test))]
 fn downscale_factor(width: usize, height: usize) -> f64 {
     (MAX_EDGE as f64 / width.max(height).max(1) as f64).min(1.0)
 }
 
 /// BGRA → RGB 并顺带缩到 MAX_EDGE 以内，再按 80 质量编码
+#[cfg(any(windows, test))]
 fn encode_jpeg(pixels: Vec<u8>, width: usize, height: usize) -> Vec<u8> {
     let mut rgb: Vec<u8> = Vec::with_capacity(width * height * 3);
     for chunk in pixels.chunks_exact(4) {
@@ -149,6 +181,7 @@ fn encode_jpeg(pixels: Vec<u8>, width: usize, height: usize) -> Vec<u8> {
     }
 }
 
+#[cfg(windows)]
 pub fn grab_screen() -> Result<Vec<u8>, String> {
     unsafe {
         let (width, height) = (GetSystemMetrics(SM_CXSCREEN), GetSystemMetrics(SM_CYSCREEN));
@@ -163,6 +196,7 @@ pub fn grab_screen() -> Result<Vec<u8>, String> {
     }
 }
 
+#[cfg(windows)]
 fn window_title(hwnd: HWND) -> Option<String> {
     let mut buf = [0u16; 512];
     let len = unsafe { GetWindowTextW(hwnd, &mut buf) };
@@ -178,16 +212,19 @@ fn window_title(hwnd: HWND) -> Option<String> {
     }
 }
 
+#[cfg(windows)]
 fn window_rect(hwnd: HWND) -> Option<RECT> {
     let mut rect = RECT::default();
     unsafe { GetWindowRect(hwnd, &mut rect) }.ok().map(|_| rect)
 }
 
+#[cfg(windows)]
 fn enumerated() -> &'static Mutex<Vec<(isize, String)>> {
     static E: OnceLock<Mutex<Vec<(isize, String)>>> = OnceLock::new();
     E.get_or_init(Default::default)
 }
 
+#[cfg(windows)]
 unsafe extern "system" fn collect_window(hwnd: HWND, _lparam: LPARAM) -> BOOL {
     if IsWindowVisible(hwnd).as_bool() {
         if let Some(title) = window_title(hwnd) {
@@ -201,6 +238,7 @@ unsafe extern "system" fn collect_window(hwnd: HWND, _lparam: LPARAM) -> BOOL {
 }
 
 /// 可见顶层窗口清单：既是 captureWindow 的选择依据，也是给用户的可读名字
+#[cfg(windows)]
 fn visible_windows() -> Vec<(HWND, String)> {
     unsafe {
         enumerated().lock().expect("窗口枚举表被污染").clear();
@@ -215,6 +253,7 @@ fn visible_windows() -> Vec<(HWND, String)> {
     }
 }
 
+#[cfg(windows)]
 pub fn grab_window(window_name: Option<&str>) -> Result<(Vec<u8>, String), String> {
     let found = visible_windows();
     if found.is_empty() {
@@ -239,6 +278,24 @@ pub fn grab_window(window_name: Option<&str>) -> Result<(Vec<u8>, String), Strin
         let _ = ReleaseDC(Some(hwnd), src);
         result.map(|bytes| (bytes, picked.1.clone()))
     }
+}
+
+// ── 非 Windows 平台的同名 stub ────────────────────────────────────────────────
+//
+// 截图能力（整屏 / 指定窗口）是 GDI 专有的，macOS / Linux 没有等价 API。
+// 这里**保留命令、只把能力缺口显式说出来** —— 与 runtime.rs 的既有口径一致
+// （「能力缺口不做成静默成功」）：
+//   · 命令照常注册，前端 invoke 不会因为「命令不存在」而拿到无意义的异常；
+//   · 返回 success:false + 明确原因，用户知道是平台不支持而不是程序坏了。
+// 2026-10-21 随「windows crate 改为 target 条件依赖」一并加入。
+#[cfg(not(windows))]
+pub fn grab_screen() -> Result<Vec<u8>, String> {
+    Err("本平台暂无屏幕截图实现（截图当前仅支持 Windows）".to_string())
+}
+
+#[cfg(not(windows))]
+pub fn grab_window(_window_name: Option<&str>) -> Result<(Vec<u8>, String), String> {
+    Err("本平台暂无窗口截图实现（截图当前仅支持 Windows）".to_string())
 }
 
 fn temp_screenshot_path() -> PathBuf {

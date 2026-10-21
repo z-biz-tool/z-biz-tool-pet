@@ -328,13 +328,50 @@ pub fn pin_list() -> Vec<Value> {
 pub fn add_pin(content: &str) -> Value {
     let mut pins = read_list(pins_file());
     let pin = json!({
-        "id": chrono::Utc::now().timestamp_millis().to_string(),
+        "id": next_pin_id(&pins),
         "content": content,
         "createdAt": store::now_iso()
     });
     pins.push(pin.clone());
     write_list(pins_file(), pins);
     pin
+}
+
+/// 生成一个**当前列表内唯一**的 pin id。
+///
+/// 2026-10-21 修的真 bug：id 原来只是 `Utc::now().timestamp_millis()`，
+/// 而毫秒时间戳在**同一毫秒内连建两条**就完全相同（实测两次 `pin_create`
+/// 拿到同一个 id "1792591195096"）⇒ `pin_remove(id)` 会把两条一起删掉
+/// （过滤条件是 `p.id != id`，撞 id 时两条都被滤掉）。
+/// 用户快速连点两次「快速笔记」就会丢一条 —— 静默丢数据，没有任何报错。
+///
+/// 现在在毫秒戳后加一个**列表内递增序号**：
+/// 序号 = 现有 id 里同毫秒的最大序号 + 1 ⇒ 同毫秒内连建 N 条互不冲突，
+/// 且历史数据的纯毫秒 id 仍能正常解析（纯数字视为序号 0）。
+/// id 保持**纯数字前缀**（前端按字符串比较），格式 `<毫秒>` 或 `<毫秒>-<序号>`。
+fn next_pin_id(pins: &[Value]) -> String {
+    let millis = chrono::Utc::now().timestamp_millis();
+    let head = millis.to_string();
+    // 本毫秒内已出现的最大序号。**纯数字 id（无尾号）也算序号 0** ——
+    // 否则第一条（纯毫秒）与第二条（纯毫秒）会撞同一个值。
+    let mut max_seq: Option<u32> = None;
+    for p in pins {
+        let Some(id) = p.get("id").and_then(|v| v.as_str()) else { continue };
+        let (id_head, seq) = match id.split_once('-') {
+            Some((h, tail)) => (h, tail.parse::<u32>().unwrap_or(0)),
+            None => (id, 0),
+        };
+        if id_head != head {
+            continue;
+        }
+        max_seq = Some(max_seq.map_or(seq, |m: u32| m.max(seq)));
+    }
+    match max_seq {
+        // 本毫秒还没有任何 pin ⇒ 用裸毫秒戳（与历史格式一致）
+        None => head,
+        // 已有 ⇒ 序号 +1，保证同毫秒内不重复
+        Some(m) => format!("{head}-{}", m + 1),
+    }
 }
 
 #[tauri::command]
@@ -588,6 +625,37 @@ mod tests {
         assert_eq!(s.hunger, 12.0, "磁盘上的值优先");
         assert_eq!(s.health, 100.0, "缺的键回落默认值而不是 0");
         assert_eq!(s.stage, "egg");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::env::remove_var("ZBOT_DATA_DIR");
+    }
+
+    /// 回归钉：同毫秒内连建两条 pin，id 必须不同，且删一条不能连带删掉另一条。
+    ///
+    /// 2026-10-21 修的真 bug：id 原来是纯毫秒时间戳 ⇒ 同毫秒连建两条 id 相同
+    /// ⇒ `pin_remove` 按 id 过滤时把两条一起删掉（实测删完剩 0 条，应剩 1 条）。
+    #[test]
+    fn pins_created_in_the_same_millisecond_get_distinct_ids() {
+        let _g = crate::lock_test_env();
+        let dir = isolated("pinid");
+        let _ = std::fs::remove_dir_all(&dir);
+        store::invalidate(&pins_file());
+        let a = pin_create("第一条".into());
+        let b = pin_create("第二条".into());
+        let c = pin_create("第三条".into());
+        let ids = [
+            a["id"].as_str().unwrap().to_string(),
+            b["id"].as_str().unwrap().to_string(),
+            c["id"].as_str().unwrap().to_string(),
+        ];
+        assert_ne!(ids[0], ids[1], "同毫秒建的两条 id 必须不同");
+        assert_ne!(ids[1], ids[2], "同毫秒建的三条 id 必须两两不同");
+        assert_eq!(pin_list().len(), 3);
+        // 删第一条只能删掉第一条
+        assert!(pin_remove(ids[0].clone()));
+        let left = pin_list();
+        assert_eq!(left.len(), 2, "删一条不能连带删掉同毫秒建的其它两条");
+        assert!(left.iter().any(|p| p["id"] == json!(ids[1])));
+        assert!(left.iter().any(|p| p["id"] == json!(ids[2])));
         let _ = std::fs::remove_dir_all(&dir);
         std::env::remove_var("ZBOT_DATA_DIR");
     }
