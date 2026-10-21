@@ -110,15 +110,19 @@ unsafe fn capture_into(
     let bitmap = CreateCompatibleBitmap(src_dc, width, height);
     let previous: HGDIOBJ = SelectObject(mem_dc, bitmap.into());
     let painted = paint(mem_dc);
-    let mut info = BITMAPINFO::default();
-    info.bmiHeader = BITMAPINFOHEADER {
-        biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-        biWidth: width,
-        // 负高度 = 自顶向下的行序，省一次翻转
-        biHeight: -height,
-        biPlanes: 1,
-        biBitCount: 32,
-        biCompression: BI_RGB.0,
+    // 用结构体更新语法一次建好：`BITMAPINFO::default()` 之后再逐字段赋值会被 clippy
+    // 判成 `field_reassign_with_default`（默认实例上的字段再赋值）。
+    let mut info = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width,
+            // 负高度 = 自顶向下的行序，省一次翻转
+            biHeight: -height,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        },
         ..Default::default()
     };
     let mut pixels = vec![0u8; width as usize * height as usize * 4];
