@@ -2,27 +2,47 @@ name: CI
 
 # 每次 push / PR 做前端门禁 + Rust 单测。
 #
-# 2026-10-21 加了 macOS 腿。原来的注释是「只有 windows：截图走 Win32 GDI（windows crate），
-# macOS 腿还没有对应实现，放进矩阵只会得到一个必然失败的 job」——
-# 那条判断当时是对的，但**根因在依赖声明**，不在「macOS 没有对应实现」：
-# `windows` crate 之前是**无条件依赖**，而上游 `windows-future 0.3.2` 的
-# `async_spawn.rs` 无条件调用 `windows_threading::submit`（该 crate 整个是 `#![cfg(windows)]`）
+# ── 关于「非 Windows 平台能不能编译」这件事 ──
+#
+# 2026-10-21 实测出的真断裂：`windows` crate 当时是**无条件依赖**，而上游
+# `windows-future 0.3.2` 的 `async_spawn.rs` **无条件**调用
+# `windows_threading::submit`（`windows-threading` 整个 crate 是 `#![cfg(windows)]`）
 # ⇒ 在 macOS / Linux 上编译 pet **必然**报
 #   error[E0425]: cannot find function `submit` in crate `windows_threading`
-# 现在 `windows` 改成了 `[target.'cfg(windows)'.dependencies]`，非 Windows 平台不再编它，
+# 而 pet 的 CI **只有 Windows 腿** ⇒ 这个断裂在 CI 上**永远看不见**，
+# 只有开发者在本机（非 Windows）编译时才会撞上。
+#
+# 现在 `windows` 已改成 `[target.'cfg(windows)'.dependencies]`，非 Windows 平台不再编它，
 # 截图能力在非 Windows 上由同名 stub 返回明确错误（口径与 runtime.rs 一致：
 # 「能力缺口不做成静默成功」）。
 #
-# 这条 macOS 腿的价值：**它会守住「别再把 Windows-only 依赖拖成无条件依赖」这件事**。
-# 没有它，下次谁把 `windows` 改回无条件依赖，仓库在 macOS / Linux 上又编不过了，
-# 而 Windows-only 的 CI **永远发现不了**。
+# **但「谁来守住这件事」换了个方案**：
 #
-# 为什么只加 macOS 不加 ubuntu：Linux 上 `cargo test` 要先 apt 装一整套 GTK/WebKit，
-# 装失败的信息看起来还像代码问题（mind 的 CI 注释里记了同一个坑）。
+# 试过加一条 `runs-on: macos-latest` 的 push 门禁 —— 它在 GitHub 侧**排队 21 分钟**
+# 拿不到 runner，被 GitHub **自动 cancel** ⇒ 在 `concurrency: cancel-in-progress`
+# 之下整条 run 判 **failure**。
+# 一个会因 runner 资源紧张而红的门禁比没有门禁更糟 —— **它训练团队忽略红灯**。
+#
+# 所以拆成两半：
+#
+# 1. **push 门禁靠仓内守卫测试**：`src-tauri/tests/cross_platform_guard.rs`
+#    （12 条断言 + 6 条反例自证），任何 runner 都能跑，Windows 腿上 2 分钟跑完。
+#    它守的是**依赖声明 + import 守卫 + stub 存在**三件事 ——
+#    比「在 macOS 上编译一遍」更早发现问题（依赖声明被改错的那一刻就红，
+#    不必等某个平台的编译器报错）。
+# 2. **编译级验证留成手动触发**（`workflow_dispatch` → `verify-macos` 腿），
+#    不进 push 门禁。它是**残留风险**：守卫是文本级的，
+#    不等于「整仓在 macOS 上真的编得过」。
+#    这条口径记在 lead 的 `06_验收与风险清单.md` R11。
+#
+# 为什么手动腿只加 macOS 不加 ubuntu：Linux 上 `cargo test` 要先 apt 装一整套
+# GTK/WebKit，装失败的信息看起来还像代码问题（mind 的 CI 注释里记了同一个坑）。
 on:
   push:
     branches: [main, master]
   pull_request:
+  # 手动触发：跑 macOS 编译级验证（不进 push 门禁，理由见上）
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -75,19 +95,30 @@ jobs:
       # tauri::generate_context! 读 build.frontendDist=../dist/renderer，必须先有 dist/
       - name: Rust tests
         working-directory: src-tauri
+        # `--all-targets`（不是 `--lib`）：`--lib` **不含** `src-tauri/tests/` 下的
+        # integration test ⇒ 跨平台守卫测试 `cross_platform_guard` 根本不会被执行，
+        # 门禁形同虚设。「跳过/未覆盖必须可见」—— 命令写成 `--lib` 就是看不见。
+        #
         # `-- --nocapture`：Rust 测试框架默认**吞掉通过用例的 stdout/stderr**
         # ⇒ 本仓「[LIVE] 跳过 minimax 真实 API 实测…」这类跳过标记在 CI 日志里
         # 看不见 ⇒ 「没跑」看着跟「跑过了」一样。打开捕获后可核对。
-        run: cargo test --lib -- --nocapture
+        run: cargo test --all-targets -- --nocapture
 
       # 端点台账：契约快照（scripts/endpoint-contract.json）里每一个都必须接通
       - name: Port ledger
         run: npm run port:status
 
-  # macOS 腿：只跑 Rust 侧（前端门禁在 Windows 腿上已经跑过，不必重复）。
+  # ── macOS 编译级验证：**手动触发**，不在 push 门禁里 ──
+  #
+  # 只跑 Rust 侧（前端门禁在 Windows 腿上已经跑过，不必重复）。
   # 它守的是**「非 Windows 平台必须能编译」**这条 —— 截图等 Win32 能力在 macOS 上
   # 表现为「命令在、但返回明确的不支持」，而不是「整仓编不过」。
+  #
+  # 为什么不做成 push 门禁：macos-latest 排队 21 分钟会被 GitHub 自动 cancel
+  # ⇒ 在 `concurrency: cancel-in-progress` 之下整条 run 判 failure
+  # ⇒ 门禁会因 runner 资源紧张而红。
   verify-macos:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -101,6 +132,7 @@ jobs:
 
       # GitHub 新 token 会写坏 dtolnay 生成的 cargo config（2026-10-03 收编进模板）
       - name: Reset broken cargo config
+        shell: bash
         run: rm -f "$HOME/.cargo/config.toml"
 
       - uses: actions/cache@v4
@@ -121,4 +153,4 @@ jobs:
 
       - name: Rust tests (macOS)
         working-directory: src-tauri
-        run: cargo test --lib -- --nocapture
+        run: cargo test --all-targets -- --nocapture
