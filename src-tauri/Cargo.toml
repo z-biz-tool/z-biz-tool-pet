@@ -40,6 +40,7 @@ tauri-plugin-notification = "2"
 tauri-plugin-global-shortcut = "2"
 # 开机自启：Electron 的 app.setLoginItemSettings 在 Tauri 侧的对应物
 tauri-plugin-autostart = "2"
+tauri-plugin-single-instance = "2"
 # 截图隐身（SetWindowDisplayAffinity）与鼠标推送（GetCursorPos）只能直调 Win32；
 # 本仓库是组织里第一个用 windows crate 的产品。版本跟 tauri 2.12 对齐（0.62），
 # 否则 win.hwnd() 返回的 HWND 与本地 HWND 是两个不同类型，得手工转指针。

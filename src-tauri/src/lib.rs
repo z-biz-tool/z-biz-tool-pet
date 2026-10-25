@@ -35,6 +35,18 @@ pub(crate) fn lock_test_env() -> std::sync::MutexGuard<'static, ()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // 单实例（2026-10-26 分发底座）：第二次启动聚焦已有窗口，不再开新进程。
+        // 必须作为第一个注册的插件（tauri-plugin-single-instance 官方要求）。
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(window) = app
+                .get_webview_window("admin")
+                .or_else(|| app.get_webview_window("pet"))
+            {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
