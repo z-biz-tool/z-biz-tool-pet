@@ -43,7 +43,8 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self' customprotocol: asset:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost http://localhost:11434 https://api.openai.com https://api.deepseek.com https://dashscope.aliyuncs.com https://api.anthropic.com https://generativelanguage.googleapis.com https://api.minimaxi.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'",
+      "devCsp": "default-src 'self' customprotocol: asset:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost http://localhost:5173 ws://localhost:5173 http://localhost:11434 https://api.openai.com https://api.deepseek.com https://dashscope.aliyuncs.com https://api.anthropic.com https://generativelanguage.googleapis.com https://api.minimaxi.com; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
     }
   },
   "bundle": {
