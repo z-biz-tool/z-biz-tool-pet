@@ -5,6 +5,26 @@
 //! 与 Electron 的差别只有两处，都是"照搬会掉洞里"的：
 //! - 非流式聊天加了 15s 连接超时（Electron 一个 fetch 超时都没有，上游挂了 invoke 就永远悬着）。
 //! - 流式解码按完整 UTF-8 边界切，中文跨 chunk 不再出现半个字。
+//!
+//! ## 迁移登记（2026-10-26，未迁移）
+//!
+//! 家族 AI 层已归并到 cap-llm，本文件是最后一个自建协议实现。**不迁的原因
+//! 不是没排上，是能力还没齐**：本文件的 agentic 工具循环（router.rs 的
+//! run_tool_calls）要求「assistant 消息携带 tool_calls + tool 结果作为新
+//! 消息回传」，而 cap-llm 的 Message 目前只有 system/user/assistant 三种
+//! role、没有 tool_call_id 建模——硬迁会把工具链砍断。
+//!
+//! 已下沉的部分（cap-llm 2026-10-26 版）：ToolDef 声明的四协议翻译
+//! （openai/anthropic/gemini/ollama）、tool_calls 响应归一为 OpenAI 形状
+//! （含 claude input 对象→arguments 字符串、gemini functionCall 合成 id、
+//! ollama arguments 对象→字符串）、Anthropic 视觉的 base64 source 块、
+//! 流式主动停止（chat_stream_if）。本文件的 claude_tools/gemini_tools/
+//! claude_tool_blocks/gemini_function_calls 四组转换在迁移时可直接删除，
+//! 由 cap-llm 顶替。
+//!
+//! 迁移步骤（下一轮）：cap-llm 加 Role::Tool + tool_call_id → 本文件的
+//! stream_chat/chat 换 cap_llm::chat_stream_if / chat_with_tools →
+//! 删四个转换函数与 build_request_body 的协议分支 → 111 个测试回归。
 
 use std::time::Duration;
 
