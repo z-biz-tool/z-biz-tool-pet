@@ -119,6 +119,9 @@ interface ElectronApi {
   // 快捷键事件
   onShortcutScreenshot(callback: () => void): () => void;
 
+  // 托盘「设置」：打开管理端并切到设置页（channel: open:settings）
+  onOpenSettings(callback: () => void): () => void;
+
   // 按住说话
   onPushToTalkStart(callback: () => void): () => void;
   onPushToTalkStop(callback: () => void): () => void;

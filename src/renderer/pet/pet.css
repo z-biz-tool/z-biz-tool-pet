@@ -364,6 +364,10 @@ html, body, #root {
   border-radius: 10px;
   padding: 6px 0;
   min-width: 160px;
+  /* 200×320 的窗口放不下整份菜单：超出后菜单内部滚动，不把内容顶出窗口 */
+  max-height: 280px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   box-shadow: 0 8px 32px rgba(0,0,0,0.4);
   z-index: 9999;
   font-size: 13px;
@@ -391,16 +395,13 @@ html, body, #root {
   background: rgba(255,255,255,0.1);
   margin: 4px 8px;
 }
+/* 子菜单改为内联展开：窗口只有 200px 宽，向右绝对定位的浮层必然被窗口裁掉 */
 .submenu {
-  position: absolute;
-  left: 100%;
-  top: 0;
-  background: rgba(30, 30, 50, 0.95);
-  backdrop-filter: blur(10px);
-  border-radius: 10px;
-  padding: 6px 0;
-  min-width: 140px;
-  box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+  position: static;
+  margin: 4px 0 2px 6px;
+  background: rgba(255,255,255,0.04);
+  border-radius: 8px;
+  padding: 2px 0;
 }
 .submenu-item {
   padding: 7px 14px;

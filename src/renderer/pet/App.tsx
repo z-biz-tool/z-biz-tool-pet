@@ -23,6 +23,7 @@ import {
   resolveEmotion,
   buildEmotionPromptSuffix,
 } from '../shared/emotions';
+import { clampMenuPosition, errorMessage } from '../shared/interaction';
 import './pet.css';
 
 const log = (msg: string) => {
@@ -113,7 +114,6 @@ function App() {
   const [petStats, setPetStats] = useState<PetCoreStats>(DEFAULT_STATS);
   const [currentEmotion, setCurrentEmotion] = useState<Emotion>('happy');
   const [showHUD, setShowHUD] = useState(false);
-  const [showActions, setShowActions] = useState(false);
   const [micGuide, setMicGuide] = useState(false);
   const cursorDeltaRef = useRef({ dx: 0, dy: 0 });
   // 流式回复缓冲（T3.8）：main 只把 chunk 发给发起窗口，这里按 ref 判定归属
@@ -135,10 +135,26 @@ function App() {
   const triggerAnimationRef = useRef<((animType: AnimationType, source?: 'user' | 'status' | 'idle') => void) | null>(null);
   const startIdleSchedulerRef = useRef<(() => void) | null>(null);
   const spawnHeartsRef = useRef<(() => void) | null>(null);
+  const hintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // 统一提示条：后一条提示覆盖前一条，避免旧定时器把新提示提前清掉
+  const flashHint = useCallback((text: string, ms = 4000) => {
+    if (hintTimerRef.current) clearTimeout(hintTimerRef.current);
+    setHint(text);
+    hintTimerRef.current = setTimeout(() => {
+      hintTimerRef.current = null;
+      setHint('');
+    }, ms);
+  }, []);
 
   const refreshStats = useCallback(async () => {
-    const stats = await window.electronAPI?.petGetStats();
-    if (stats) setPetStats(stats as PetCoreStats);
+    try {
+      const stats = await window.electronAPI?.petGetStats();
+      if (stats) setPetStats(stats as PetCoreStats);
+    } catch (error) {
+      // 养成数值是后台刷新，失败时保留上一次的值即可；但必须留痕，不能静默
+      log('[Pet] 养成状态刷新失败: ' + errorMessage(error, '主进程无响应'));
+    }
   }, []);
 
   // 主进程动作投递（定时任务 speak/animation/... 修复 D12 后的接收端）
@@ -273,15 +289,9 @@ function App() {
       }
     }).catch((e: any) => {
       // 读配置失败只降级到默认值，宠物必须照常可见可点
-      log('[Pet] 配置读取失败，改用默认设置: ' + (e?.message || e));
-      setHint('配置读取失败 · 已用默认设置');
-      setTimeout(() => setHint(''), 4000);
+      log('[Pet] 配置读取失败，改用默认设置: ' + errorMessage(e, '主进程无响应'));
+      flashHint('配置读取失败 · 已用默认设置', 5000);
     });
-
-    if (!window.electronAPI) {
-      log('[Pet] electronAPI 未注入，preload 可能加载失败');
-      setHint('主进程通道不可用 · 仅本地动画');
-    }
 
     const unsubStart = window.electronAPI?.onVoiceStart(() => startRecording());
     const unsubStop = window.electronAPI?.onVoiceStop(() => stopRecording());
@@ -328,7 +338,25 @@ function App() {
       log('[Pet] 加载场景设置失败');
     }
 
+    // 管理端改场景/粒子写的是同一 origin 的 localStorage；监听 storage 才能即时生效，
+    // 而不是“保存成功、萌宠等重启才变”（合同一.1：可点击 = 有结果）
+    const onStorage = (event: StorageEvent) => {
+      if (!event.newValue) return;
+      try {
+        if (event.key === 'current_scenery') {
+          setCurrentScenery(JSON.parse(event.newValue));
+        } else if (event.key === 'particle_settings') {
+          const parsed = JSON.parse(event.newValue);
+          if (Array.isArray(parsed)) setParticleEffects(parsed);
+        }
+      } catch (error) {
+        log('[Pet] 场景设置同步失败: ' + errorMessage(error, '数据格式非法'));
+      }
+    };
+    window.addEventListener('storage', onStorage);
+
     return () => {
+      window.removeEventListener('storage', onStorage);
       stopRecording();
       stopInterruptListener();
       unsubStart?.();
@@ -339,6 +367,7 @@ function App() {
       unsubTask?.();
       unsubChunk?.();
       clearInterval(statsTimer);
+      if (hintTimerRef.current) clearTimeout(hintTimerRef.current);
       if (animationTimerRef.current) clearTimeout(animationTimerRef.current);
       if (blinkTimerRef.current) clearTimeout(blinkTimerRef.current);
       if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
@@ -427,11 +456,16 @@ function App() {
   const applySkin = useCallback((skin: PetSkin) => {
     setCurrentSkin(skin);
     setSkinVars(getSkinCSSVariables(skin));
-    window.electronAPI?.loadConfig().then((cfg) => {
-      if (cfg) {
-        window.electronAPI?.saveConfig({ ...cfg, currentSkinId: skin.id });
-      }
-    });
+    window.electronAPI
+      ?.loadConfig()
+      .then((cfg) => {
+        if (cfg) return window.electronAPI?.saveConfig({ ...cfg, currentSkinId: skin.id });
+        return undefined;
+      })
+      .catch((error) => {
+        // 皮肤已在本窗生效；落盘失败只影响下次启动，记日志但不再打断用户
+        log('[Pet] 皮肤保存失败: ' + errorMessage(error, '主进程无响应'));
+      });
     log('[Pet] 应用皮肤: ' + skin.name);
   }, []);
 
@@ -486,7 +520,10 @@ function App() {
       interruptStreamRef.current = null;
     }
     if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-      audioContextRef.current.close().catch(() => {});
+      // 关 AudioContext 是卸载清理：关不掉也拦不住下一次录音，留日志即可
+      audioContextRef.current.close().catch((error) => {
+        log('[Pet] 关闭打断监听 AudioContext 失败: ' + errorMessage(error, '未知错误'));
+      });
       audioContextRef.current = null;
     }
     analyserRef.current = null;
@@ -516,17 +553,18 @@ function App() {
     }
     if (statusRef.current !== 'idle' && statusRef.current !== 'interrupted') return;
 
-    // T2.9：录音前预检权限，被拒时给可操作的引导，而不是静默失败
-    const granted = await window.electronAPI?.checkMicrophone();
-    if (granted === false) {
-      log('[Pet] 麦克风未授权，显示引导');
-      setMicGuide(true);
-      setStatus('idle');
-      return;
-    }
-
     log('[Pet] 开始录音...');
     try {
+      // T2.9：录音前预检权限，被拒时给可操作的引导，而不是静默失败。
+      // 预检本身也可能 reject（主进程不可用），与 getUserMedia 失败走同一个 catch。
+      const granted = await window.electronAPI?.checkMicrophone();
+      if (granted === false) {
+        log('[Pet] 麦克风未授权，显示引导');
+        setMicGuide(true);
+        setStatus('idle');
+        return;
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       });
@@ -555,9 +593,11 @@ function App() {
         stopRecording();
       }, MAX_RECORDING_MS);
     } catch (error: any) {
-      log('[Pet] 录音错误: ' + error.message);
+      log('[Pet] 录音错误: ' + errorMessage(error, '未知错误'));
       if (error?.name === 'NotAllowedError' || error?.name === 'PermissionDeniedError') {
         setMicGuide(true);
+      } else {
+        flashHint('无法开始录音：' + errorMessage(error, '请检查麦克风是否可用'));
       }
       setStatus('idle');
     }
@@ -574,29 +614,42 @@ function App() {
     }
   };
 
-  // ---------- 截图 ----------
+  // ---------- 截图分析 ----------
+  // 旧实现先弹「📸 截图完成」再请求，且只截图不分析（菜单却写“截图分析”）——
+  // 两处都违反合同：成功提示必须在 await 返回后，动作名必须与结果一致。
   const captureAndAnalyzeScreen = async () => {
     log('[Pet] 开始截图分析...');
-    setHint('📸 截图完成');
+    setContextMenu((prev) => ({ ...prev, show: false }));
+    setStatus('thinking');
+    flashHint('📸 正在分析屏幕...', 8000);
     try {
-      const result = await window.electronAPI?.captureScreenshot();
-      if (result?.success && result.path) {
-        log('[Pet] 截图成功: ' + result.path);
-        setHint('截图已保存，可在管理端查看');
+      const result = await window.electronAPI?.captureAndAnalyze();
+      if (result?.success && result.analysis) {
+        log('[Pet] 截图分析完成');
+        setLastMessage(result.analysis);
+        flashHint('截图分析完成');
       } else {
-        setHint('截图失败');
+        const reason = result?.error || '截图或视觉模型不可用';
+        log('[Pet] 截图分析失败: ' + reason);
+        flashHint('截图分析失败：' + reason, 6000);
       }
-    } catch (error: any) {
-      log('[Pet] 截图错误: ' + error.message);
-      setHint('截图错误');
+    } catch (error) {
+      log('[Pet] 截图分析异常: ' + errorMessage(error, '未知错误'));
+      flashHint('截图分析失败：' + errorMessage(error, '主进程无响应'), 6000);
+    } finally {
+      setStatus('idle');
     }
-    setTimeout(() => setHint(''), 3000);
   };
 
   // ---------- 语音识别 -> 对话 -> TTS ----------
   const processAudio = async (audioBlob: Blob) => {
     setStatus('thinking');
     const reader = new FileReader();
+    reader.onerror = () => {
+      log('[Pet] 读取录音失败');
+      flashHint('读取录音失败，请重新录音');
+      setStatus('idle');
+    };
     reader.onload = async () => {
       const base64 = (reader.result as string).split(',')[1];
       log('[Pet] 发送音频到 STT...');
@@ -607,11 +660,19 @@ function App() {
         if (data?.success && data.text) {
           await handleVoiceInput(data.text);
         } else {
-          log('[Pet] 未识别到文本' + (data?.error ? ': ' + data.error : ''));
+          // 合同二/六：失败必须看得见，不能只写日志然后回到待机
+          const reason = data?.error
+            ? data.error
+            : data
+              ? '没有听清，请再说一次'
+              : '语音服务无响应';
+          log('[Pet] 语音识别失败: ' + reason);
+          flashHint('语音识别失败：' + reason, 6000);
           setStatus('idle');
         }
-      } catch (error: any) {
-        log('[Pet] STT 错误: ' + error.message);
+      } catch (error) {
+        log('[Pet] STT 错误: ' + errorMessage(error, '未知错误'));
+        flashHint('语音识别失败：' + errorMessage(error, '请检查本地语音模型'), 6000);
         setStatus('idle');
       }
     };
@@ -620,31 +681,29 @@ function App() {
 
   const handleVoiceInput = async (text: string) => {
     if (!text.trim()) {
+      flashHint('没有识别到文字，请再说一次');
       setStatus('idle');
       return;
     }
     setStatus('thinking');
     setLastMessage('');
+    const emotionSuffix = buildEmotionPromptSuffix(currentEmotion);
     try {
-      // 注入情绪到 system prompt
-      const emotionSuffix = buildEmotionPromptSuffix(currentEmotion);
-      const systemPromptWithEmotion = config.systemPrompt + emotionSuffix;
-
       log('[Pet] 请求 AI 回复（流式）...');
       // 流式：首字直接落到气泡，工具与确认仍在主进程 ai:streamChat 内完成（T3.7/T3.8）
       streamBufRef.current = '';
       streamActiveRef.current = true;
       const response = await window.electronAPI?.aiStreamChat({
         messages: [
-          { role: 'system', content: systemPromptWithEmotion },
+          { role: 'system', content: config.systemPrompt + emotionSuffix },
           { role: 'user', content: text },
         ],
         model: config.modelName,
         stream: true,
       });
-      streamActiveRef.current = false;
       if (!response) {
         log('[Pet] AI 无响应');
+        flashHint('对话失败：AI 服务无响应', 6000);
         setStatus('idle');
         return;
       }
@@ -658,9 +717,13 @@ function App() {
 
       // 播放TTS并启动打断监听
       await speakWithInterrupt(reply);
-    } catch (error: any) {
-      log('[Pet] Error: ' + error.message);
+    } catch (error) {
+      log('[Pet] 对话失败: ' + errorMessage(error, '未知错误'));
+      flashHint('对话失败：' + errorMessage(error, 'AI 服务无响应'), 6000);
       setStatus('idle');
+    } finally {
+      // 无论成功/失败/提前 return，都必须摘掉流式归属，避免后续 chunk 写进旧气泡
+      streamActiveRef.current = false;
     }
   };
 
@@ -685,6 +748,7 @@ function App() {
 
         audio.onerror = () => {
           log('[Pet] TTS 播放错误');
+          flashHint('语音播放失败，文字回复已保留');
           currentAudioRef.current = null;
           isSpeakingRef.current = false;
           stopInterruptListener();
@@ -694,10 +758,15 @@ function App() {
         await audio.play();
         startInterruptListener();
       } else {
+        const reason = ttsData?.error || '语音合成不可用';
+        log('[Pet] TTS 失败: ' + reason);
+        flashHint('语音播放失败（' + reason + '），文字回复已保留', 5000);
         isSpeakingRef.current = false;
         setStatus('idle');
       }
-    } catch {
+    } catch (error) {
+      log('[Pet] TTS 异常: ' + errorMessage(error, '未知错误'));
+      flashHint('语音播放失败，文字回复已保留');
       isSpeakingRef.current = false;
       stopInterruptListener();
       setStatus('idle');
@@ -705,7 +774,17 @@ function App() {
   };
 
   // ---------- 交互 ----------
-  const toggleMode = () => window.electronAPI?.toggleWindow('admin');
+  const toggleMode = () => {
+    const api = window.electronAPI;
+    if (!api) {
+      flashHint('管理端通道不可用 · 仅本地动画');
+      return;
+    }
+    api.toggleWindow('admin').catch((error) => {
+      log('[Pet] 打开管理端失败: ' + errorMessage(error, '主进程无响应'));
+      flashHint('打开管理端失败：' + errorMessage(error, '主进程无响应'));
+    });
+  };
 
   const handlePetClick = () => {
     if (status === 'idle') {
@@ -748,23 +827,35 @@ function App() {
       log('[Pet] 未知养成动作: ' + action);
       return;
     }
-    const stats = await fn();
-    if (stats) {
-      setPetStats(stats as PetCoreStats);
-      setCurrentEmotion(resolveEmotion(stats as PetCoreStats));
+    try {
+      const stats = await fn();
+      if (stats) {
+        setPetStats(stats as PetCoreStats);
+        setCurrentEmotion(resolveEmotion(stats as PetCoreStats));
+      }
+      if (action === 'play' || action === 'pet') spawnHeartsRef.current?.();
+    } catch (error) {
+      log('[Pet] 养成动作失败 (' + action + '): ' + errorMessage(error, '未知错误'));
+      flashHint('互动失败：' + errorMessage(error, '主进程无响应'));
     }
-    if (action === 'play' || action === 'pet') spawnHeartsRef.current?.();
-  }, []);
+  }, [flashHint]);
   handlePetActionRef.current = handlePetAction;
 
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
-    // 右键菜单：截图 + 所有宠物操作
-    setShowActions(!showActions);
+    e.stopPropagation();
+    // 200×320 的窗口放不下从点击点向下展开的整份菜单：先按菜单尺寸夹进视口
+    const { x, y } = clampMenuPosition(
+      e.clientX,
+      e.clientY,
+      { width: window.innerWidth, height: window.innerHeight },
+      { width: 170, height: 280 }
+    );
+    setContextMenu({ x, y, show: true });
   };
 
   const handleClickOutside = () => {
-    setContextMenu({ ...contextMenu, show: false });
+    setContextMenu((prev) => ({ ...prev, show: false }));
     setAnimMenuOpen(false);
     setSkinMenuOpen(false);
   };
@@ -891,7 +982,7 @@ function App() {
       onDoubleClick={handleDoubleClick}
       onContextMenu={handleContextMenu}
       onMouseEnter={() => setShowHUD(true)}
-      onMouseLeave={() => { setShowHUD(false); setShowActions(false); }}
+      onMouseLeave={() => setShowHUD(false)}
     >
       {/* 场景粒子效果层：particleEnabled 关闭时完全不渲染，避免常驻 infinite 动画占用合成开销 */}
       {config.particleEnabled && (
@@ -1049,11 +1140,11 @@ function App() {
       {/* 交互按钮 - 属性低时自动显示 */}
       {status === 'idle' && (petStats.hunger < 60 || petStats.happiness < 60 || petStats.cleanliness < 60 || petStats.isSick || (!petStats.isSleeping && petStats.energy < 50)) && (
         <div className="action-buttons">
-          {petStats.hunger < 60 && <button className="action-btn" onClick={(e) => { e.stopPropagation(); handlePetAction('feed'); }}>🍖</button>}
-          {petStats.happiness < 60 && <button className="action-btn" onClick={(e) => { e.stopPropagation(); handlePetAction('play'); }}>🎮</button>}
-          {petStats.cleanliness < 60 && <button className="action-btn" onClick={(e) => { e.stopPropagation(); handlePetAction('wash'); }}>🛁</button>}
-          {!petStats.isSleeping && petStats.energy < 50 && <button className="action-btn" onClick={(e) => { e.stopPropagation(); handlePetAction('sleep'); }}>💤</button>}
-          {petStats.isSick && <button className="action-btn" onClick={(e) => { e.stopPropagation(); handlePetAction('medicine'); }}>💊</button>}
+          {petStats.hunger < 60 && <button className="action-btn" aria-label="喂食" title="喂食" onClick={(e) => { e.stopPropagation(); handlePetAction('feed'); }}>🍖</button>}
+          {petStats.happiness < 60 && <button className="action-btn" aria-label="玩耍" title="玩耍" onClick={(e) => { e.stopPropagation(); handlePetAction('play'); }}>🎮</button>}
+          {petStats.cleanliness < 60 && <button className="action-btn" aria-label="洗澡" title="洗澡" onClick={(e) => { e.stopPropagation(); handlePetAction('wash'); }}>🛁</button>}
+          {!petStats.isSleeping && petStats.energy < 50 && <button className="action-btn" aria-label="睡觉" title="睡觉" onClick={(e) => { e.stopPropagation(); handlePetAction('sleep'); }}>💤</button>}
+          {petStats.isSick && <button className="action-btn" aria-label="治疗" title="治疗" onClick={(e) => { e.stopPropagation(); handlePetAction('medicine'); }}>💊</button>}
         </div>
       )}
 
@@ -1066,6 +1157,8 @@ function App() {
       {contextMenu.show && (
         <div
           className="context-menu"
+          role="menu"
+          aria-label="宠物右键菜单"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onClick={(e) => e.stopPropagation()}
         >

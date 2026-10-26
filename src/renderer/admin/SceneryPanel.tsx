@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Card, Row, Col, Button, Typography, ColorPicker, Space, Modal, Form, Input, message } from 'antd';
 import { SunOutlined, MoonOutlined, ThunderboltOutlined, CloudOutlined } from '@ant-design/icons';
+import { errorMessage } from '../shared/interaction';
 
 const { Title, Text } = Typography;
 
@@ -54,31 +55,54 @@ const SceneryPanel: React.FC<SceneryPanelProps> = ({ open }) => {
     enabled: true,
   });
   const [isCustomModalOpen, setIsCustomModalOpen] = useState(false);
+  // 粒子开关必须是 state：旧实现只写 localStorage，按钮颜色永远不变（点了没反应）
+  const [particles, setParticles] = useState<ParticleConfig[]>(PARTICLE_TYPES);
   const [form] = Form.useForm();
 
   useEffect(() => {
     if (open) {
       const saved = localStorage.getItem('current_scenery');
       if (saved) {
-        const scenery = JSON.parse(saved);
-        setCurrentScenery(scenery);
+        try {
+          setCurrentScenery(JSON.parse(saved));
+        } catch (error) {
+          message.error('场景设置读取失败，已使用默认场景：' + errorMessage(error, '格式非法'));
+        }
       }
-      
+
       const savedParticles = localStorage.getItem('particle_settings');
       if (savedParticles) {
-        // 加载粒子设置
+        try {
+          const parsed = JSON.parse(savedParticles);
+          if (Array.isArray(parsed)) setParticles(parsed);
+          else throw new Error('不是数组');
+        } catch (error) {
+          message.error('粒子设置读取失败，已使用默认值：' + errorMessage(error, '格式非法'));
+        }
       }
     }
   }, [open]);
 
-  const handleScenerySelect = (scenery: Scenery) => {
-    setCurrentScenery(scenery);
-    localStorage.setItem('current_scenery', JSON.stringify(scenery));
+  const persistScenery = (scenery: Scenery): boolean => {
+    try {
+      localStorage.setItem('current_scenery', JSON.stringify(scenery));
+      return true;
+    } catch (error) {
+      message.error('场景保存失败: ' + errorMessage(error, '本地存储不可用'));
+      return false;
+    }
   };
 
-  const handleCustomSave = () => {
+  const handleScenerySelect = (scenery: Scenery) => {
+    // 先落盘成功，再改界面与提示（不假成功）
+    if (!persistScenery(scenery)) return;
+    setCurrentScenery(scenery);
+    message.success(`已切换到「${scenery.name}」`);
+  };
+
+  const handleCustomSave = async () => {
     try {
-      const values = form.getFieldsValue();
+      const values = await form.validateFields();
       const custom: Scenery = {
         id: 'custom',
         name: values.name || '自定义',
@@ -88,19 +112,26 @@ const SceneryPanel: React.FC<SceneryPanelProps> = ({ open }) => {
         particleColor: values.particleColor || '#FF6B6B',
         enabled: true,
       };
+      if (!persistScenery(custom)) return;
       setCustomScenery(custom);
       setCurrentScenery(custom);
-      localStorage.setItem('current_scenery', JSON.stringify(custom));
       setIsCustomModalOpen(false);
       message.success('自定义场景已保存');
-    } catch (e: any) {
-      message.error('保存失败: ' + e.message);
+    } catch (e) {
+      if (e && typeof e === 'object' && 'errorFields' in e) return;
+      message.error('保存失败: ' + errorMessage(e, '未知错误'));
     }
   };
 
   const handleParticleToggle = (id: string) => {
-    const updated = PARTICLE_TYPES.map(p => p.id === id ? { ...p, enabled: !p.enabled } : p);
-    localStorage.setItem('particle_settings', JSON.stringify(updated));
+    const updated = particles.map((p) => (p.id === id ? { ...p, enabled: !p.enabled } : p));
+    try {
+      localStorage.setItem('particle_settings', JSON.stringify(updated));
+      setParticles(updated);
+      message.success('粒子特效已保存');
+    } catch (error) {
+      message.error('粒子设置保存失败: ' + errorMessage(error, '本地存储不可用'));
+    }
   };
 
   return (
@@ -112,14 +143,23 @@ const SceneryPanel: React.FC<SceneryPanelProps> = ({ open }) => {
             <Col span={6} key={scenery.id}>
               <Card
                 hoverable
+                role="button"
+                tabIndex={0}
+                aria-label={`切换场景 ${scenery.name}`}
                 style={{
                   backgroundColor: scenery.backgroundColor,
                   border: currentScenery.id === scenery.id ? '2px solid #1890ff' : '2px solid transparent',
                 }}
                 onClick={() => handleScenerySelect(scenery)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    handleScenerySelect(scenery);
+                  }
+                }}
               >
                 <Space direction="vertical" align="center">
-                  <span style={{ fontSize: 24 }}>
+                  <span style={{ fontSize: 24 }} aria-hidden="true">
                     {scenery.type === 'day' && <SunOutlined />}
                     {scenery.type === 'night' && <MoonOutlined />}
                     {scenery.type === 'rain' && <ThunderboltOutlined />}
@@ -140,10 +180,12 @@ const SceneryPanel: React.FC<SceneryPanelProps> = ({ open }) => {
       <Card title="粒子特效" style={{ marginTop: 16 }}>
         <Title level={5}>粒子类型</Title>
         <Row gutter={16}>
-          {PARTICLE_TYPES.map((particle) => (
+          {particles.map((particle) => (
             <Col span={4} key={particle.id}>
               <Button
                 type={particle.enabled ? 'primary' : 'default'}
+                aria-label={`粒子特效 ${particle.type}`}
+                aria-pressed={particle.enabled}
                 style={{ width: '100%', height: 80, fontSize: 24 }}
                 onClick={() => handleParticleToggle(particle.id)}
               >

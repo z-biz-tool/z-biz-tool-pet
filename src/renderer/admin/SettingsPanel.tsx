@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Drawer, Form, Input, InputNumber, Button, Divider, Select, message, Space, Typography, Card, Tag, Popconfirm } from 'antd';
 import { SaveOutlined, ReloadOutlined, DeleteOutlined, ApiOutlined, CheckCircleOutlined, CloseCircleOutlined, LoadingOutlined, EyeOutlined } from '@ant-design/icons';
 import { DEFAULT_CONFIG, SCENE_PROMPTS } from '../shared/prompts';
+import { errorMessage } from '../shared/interaction';
 
 const { TextArea } = Input;
 const { Text } = Typography;
@@ -60,6 +61,8 @@ interface ShortcutRow {
 const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose, onSave }) => {
   const [form] = Form.useForm<PetConfig>();
   const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [installing, setInstalling] = useState(false);
   const [providers, setProviders] = useState<AIProvider[]>([]);
   const [currentProviderId, setCurrentProviderId] = useState<string>('ollama');
   const [testingConnection, setTestingConnection] = useState(false);
@@ -121,21 +124,37 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose, onSave }) 
       const r: any = await window.electronAPI?.updateCheck();
       setUpdateText(describeUpdate(r));
       setUpdateAvailable(r?.status === 'available' || r?.status === 'downloaded');
+    } catch (e) {
+      const reason = errorMessage(e, '主进程无响应');
+      setUpdateText('检查失败: ' + reason);
+      message.error('检查更新失败: ' + reason);
     } finally {
       setCheckingUpdate(false);
     }
   };
 
   const handleInstallUpdate = async () => {
-    const r: any = await window.electronAPI?.updateInstall();
-    if (!r?.ok) message.error('安装失败: ' + (r?.reason || '未知错误'));
+    setInstalling(true);
+    try {
+      const r: any = await window.electronAPI?.updateInstall();
+      if (!r?.ok) message.error('安装失败: ' + (r?.reason || '未知错误'));
+    } catch (e) {
+      message.error('安装失败: ' + errorMessage(e, '主进程无响应'));
+    } finally {
+      setInstalling(false);
+    }
   };
 
   const loadRuntimeOptions = async () => {
-    const info = await window.electronAPI?.sttModels();
-    if (info) setSttInfo(info as SttModelInfo);
-    const rows = await window.electronAPI?.shortcutsList();
-    if (rows) setShortcutRows(rows as ShortcutRow[]);
+    try {
+      const info = await window.electronAPI?.sttModels();
+      if (info) setSttInfo(info as SttModelInfo);
+      const rows = await window.electronAPI?.shortcutsList();
+      if (rows) setShortcutRows(rows as ShortcutRow[]);
+    } catch (e) {
+      // 设置面板仍可用；运行时能力（STT 模型/快捷键）读不到就保持空列表并留痕
+      console.warn('[Admin] 运行时选项读取失败:', errorMessage(e, '主进程无响应'));
+    }
   };
 
   const applyShortcuts = async () => {
@@ -143,14 +162,18 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose, onSave }) 
     shortcutRows.forEach((r) => {
       overrides[r.key] = r.accelerator;
     });
-    const res: any = await window.electronAPI?.shortcutsUpdate(overrides);
-    if (res?.ok) {
-      message.success('快捷键已更新');
-    } else {
-      const bad = [...(res?.failed || []), ...(res?.rejected || [])];
-      message.warning('部分快捷键未生效: ' + bad.join('、'));
+    try {
+      const res: any = await window.electronAPI?.shortcutsUpdate(overrides);
+      if (res?.ok) {
+        message.success('快捷键已更新');
+      } else {
+        const bad = [...(res?.failed || []), ...(res?.rejected || [])];
+        message.warning('部分快捷键未生效: ' + (bad.join('、') || '主进程未返回详情'));
+      }
+      await loadRuntimeOptions();
+    } catch (e) {
+      message.error('快捷键更新失败: ' + errorMessage(e, '主进程无响应'));
     }
-    await loadRuntimeOptions();
   };
 
   const reportApplied = (applied?: { sttModel?: boolean; shortcuts?: boolean }) => {
@@ -185,6 +208,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose, onSave }) 
       }
     } catch (e) {
       form.setFieldsValue(DEFAULT_CONFIG);
+      message.warning('配置读取失败，已载入默认值：' + errorMessage(e, '主进程无响应'));
     } finally {
       setLoading(false);
     }
@@ -193,6 +217,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose, onSave }) 
   loadConfigRef.current = loadConfig;
 
   const handleSave = async () => {
+    setSaving(true);
     try {
       const values = await form.validateFields();
       const configToSave = {
@@ -205,7 +230,14 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose, onSave }) 
       await loadRuntimeOptions();
       onClose();
     } catch (e: any) {
-      message.error('保存失败: ' + (e.message || '请检查表单'));
+      // validateFields 的 reject 是表单校验结果，不是“保存失败”，不能混为一谈
+      if (e && typeof e === 'object' && 'errorFields' in e) {
+        message.warning('请先修正表单中的必填项');
+      } else {
+        message.error('保存失败: ' + errorMessage(e, '主进程无响应'));
+      }
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -309,9 +341,10 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose, onSave }) 
       } else {
         message.error('连接失败: ' + (result?.error || '未知错误'));
       }
-    } catch (e: any) {
-      setConnectionResult({ success: false, error: e.message });
-      message.error('连接测试异常: ' + e.message);
+    } catch (e) {
+      const reason = errorMessage(e, '未知错误');
+      setConnectionResult({ success: false, error: reason });
+      message.error('连接测试异常: ' + reason);
     } finally {
       setTestingConnection(false);
     }
@@ -341,8 +374,8 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose, onSave }) 
       } else {
         message.warning('获取模型列表失败，使用默认列表');
       }
-    } catch (e: any) {
-      message.error('获取模型列表异常: ' + e.message);
+    } catch (e) {
+      message.error('获取模型列表异常: ' + errorMessage(e, '未知错误'));
     } finally {
       setFetchingModels(false);
     }
@@ -381,7 +414,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose, onSave }) 
           <Button icon={<ReloadOutlined />} onClick={handleReset} size="small">
             重置
           </Button>
-          <Button type="primary" icon={<SaveOutlined />} onClick={handleSave} size="small" loading={loading}>
+          <Button type="primary" icon={<SaveOutlined />} onClick={handleSave} size="small" loading={saving} disabled={loading}>
             保存
           </Button>
         </Space>
@@ -415,8 +448,15 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose, onSave }) 
             style={{ marginBottom: 16, background: 'rgba(255,255,255,0.04)', borderColor: 'rgba(255,255,255,0.1)' }}
             extra={
               currentProvider.id !== 'ollama' ? (
-                <Popconfirm title="确定删除此提供商？" onConfirm={() => handleDeleteProvider(currentProvider.id)}>
-                  <Button type="text" danger size="small" icon={<DeleteOutlined />} />
+                <Popconfirm
+                  title={`删除提供商「${currentProvider.name}」？`}
+                  description="保存设置后生效，已写入的 API Key 会一并移除。"
+                  okText="删除"
+                  cancelText="取消"
+                  okButtonProps={{ danger: true }}
+                  onConfirm={() => handleDeleteProvider(currentProvider.id)}
+                >
+                  <Button type="text" danger size="small" icon={<DeleteOutlined />} aria-label={`删除提供商 ${currentProvider.name}`} />
                 </Popconfirm>
               ) : null
             }
@@ -617,7 +657,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose, onSave }) 
             检查更新
           </Button>
           {updateAvailable && (
-            <Button size="small" type="primary" onClick={handleInstallUpdate}>
+            <Button size="small" type="primary" onClick={handleInstallUpdate} loading={installing}>
               下载并安装
             </Button>
           )}

@@ -1,14 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { Button, Input, Card, Tag, Space, Empty, Spin, message } from 'antd';
+import { Button, Input, Card, Tag, Space, Empty, Spin, message, Modal } from 'antd';
 import {
   AudioOutlined,
   StopOutlined,
   FileTextOutlined,
   SoundOutlined,
 } from '@ant-design/icons';
+import { errorMessage } from '../shared/interaction';
 
 interface Props {
   accent: string;
+}
+
+// IPC 边界数据不可全信：缺 segments 会让整个管理端渲染树崩掉（白屏），
+// 这里只补数组，其余字段保持后端原值。
+function normalizeState(s: MeetingState): MeetingState {
+  return { ...s, segments: Array.isArray(s.segments) ? s.segments : [] };
 }
 
 export default function MeetingPanel({ accent }: Props) {
@@ -18,10 +25,15 @@ export default function MeetingPanel({ accent }: Props) {
 
   useEffect(() => {
     (async () => {
-      const cur = await window.electronAPI?.meetingGetState();
-      if (cur) setState(cur);
+      try {
+        const cur = await window.electronAPI?.meetingGetState();
+        if (cur) setState(normalizeState(cur));
+      } catch (error) {
+        // 面板是常驻卡片：读不到状态就保持“未开始”，但必须留痕
+        console.warn('[Admin] 会议状态读取失败:', errorMessage(error, '主进程无响应'));
+      }
     })();
-    const unsubState = window.electronAPI?.onMeetingState((s) => setState(s));
+    const unsubState = window.electronAPI?.onMeetingState((s) => setState(normalizeState(s)));
     const unsubSegment = window.electronAPI?.onMeetingSegment(() => {
       // segments come via state update
     });
@@ -41,11 +53,15 @@ export default function MeetingPanel({ accent }: Props) {
     setLoading(true);
     try {
       const res = await window.electronAPI?.meetingStart(title.trim());
-      if (res && !res.success) {
-        message.error('启动失败: ' + (res.error || '未知错误'));
+      if (!res || res.success) {
+        // 主进程成功时返回 { success: true, state }；undefined 说明通道没接通，不能报成功
+        if (res) message.success('会议转录已启动');
+        else message.error('启动失败：主进程无响应');
       } else {
-        message.success('会议转录已启动');
+        message.error('启动失败: ' + (res.error || '未知错误'));
       }
+    } catch (error) {
+      message.error('启动失败: ' + errorMessage(error, '主进程无响应'));
     } finally {
       setLoading(false);
     }
@@ -55,17 +71,37 @@ export default function MeetingPanel({ accent }: Props) {
     setLoading(true);
     try {
       const res = await window.electronAPI?.meetingEnd();
-      if (res && res.state) {
+      if (res?.state) {
         message.success('会议总结已生成');
+      } else {
+        message.error('结束会议失败: ' + (res?.error || '未返回总结状态'));
       }
+    } catch (error) {
+      message.error('结束会议失败: ' + errorMessage(error, '主进程无响应'));
     } finally {
       setLoading(false);
     }
   };
 
-  const cancel = async () => {
-    await window.electronAPI?.meetingCancel();
-    message.info('已取消会议');
+  const cancel = () => {
+    // 取消会丢弃已转录内容：二次确认 + 危险色，默认焦点在“继续录音”
+    Modal.confirm({
+      title: '取消本次会议转录？',
+      content: `将丢弃「${state?.title || '本次会议'}」已转录的 ${state?.segments.length || 0} 段内容，不可恢复。`,
+      okText: '取消转录',
+      okButtonProps: { danger: true },
+      cancelText: '继续录音',
+      autoFocusButton: 'cancel',
+      centered: true,
+      onOk: async () => {
+        try {
+          await window.electronAPI?.meetingCancel();
+          message.info('已取消会议转录');
+        } catch (error) {
+          message.error('取消失败: ' + errorMessage(error, '主进程无响应'));
+        }
+      },
+    });
   };
 
   const isRecording = state?.status === 'recording';
@@ -104,12 +140,12 @@ export default function MeetingPanel({ accent }: Props) {
             </Tag>
             <span style={{ fontWeight: 500 }}>{state.title}</span>
             {isRecording && (
-              <Button size="small" icon={<StopOutlined />} onClick={end} type="primary" danger>
+              <Button size="small" icon={<StopOutlined />} onClick={end} type="primary" danger loading={loading}>
                 结束会议
               </Button>
             )}
             {isRecording && (
-              <Button size="small" onClick={cancel}>取消</Button>
+              <Button size="small" onClick={cancel} disabled={loading}>取消</Button>
             )}
           </Space>
 

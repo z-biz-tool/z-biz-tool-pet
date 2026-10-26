@@ -13,6 +13,7 @@ import {
   ConfigProvider,
   Modal,
   Collapse,
+  Alert,
 } from 'antd';
 import {
   AudioOutlined,
@@ -37,6 +38,7 @@ import QuickCommandPanel from './QuickCommandPanel';
 import AchievementPanel from './AchievementPanel';
 import SceneryPanel from './SceneryPanel';
 import { DEFAULT_CONFIG, SUGGESTED_QUESTIONS } from '../shared/prompts';
+import { errorMessage } from '../shared/interaction';
 
 const { Header, Content, Footer } = Layout;
 const { TextArea } = Input;
@@ -132,6 +134,10 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [config, setConfig] = useState<PetConfig>(DEFAULT_CONFIG);
   const [online, setOnline] = useState(false);
+  // 历史是异步加载的：先渲染空态会闪一下“欢迎页”，合同四.1 要求加载中与空态分开
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [historyError, setHistoryError] = useState('');
+  const [confirmBusy, setConfirmBusy] = useState(false);
   // 流式回复归属：只把 chunk 写进这条气泡（T3.8）
   const streamMsgIdRef = useRef<string | null>(null);
   const streamBufRef = useRef('');
@@ -173,26 +179,40 @@ function App() {
   const { token: themeToken } = antdTheme.useToken();
   const accent = config.themeColor || themeToken.colorPrimary;
 
+  const loadHistoryFromMain = async () => {
+    setHistoryLoading(true);
+    setHistoryError('');
+    try {
+      const history = await window.electronAPI?.loadHistory();
+      if (Array.isArray(history)) {
+        setMessages(history);
+        log('[Admin] 加载历史 ' + history.length + ' 条');
+      }
+    } catch (error) {
+      const reason = errorMessage(error, '主进程无响应');
+      setHistoryError('对话历史加载失败：' + reason);
+      log('[Admin] 历史加载失败: ' + reason);
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
   // 加载配置 + 历史 + 工具定义
   useEffect(() => {
     (async () => {
       try {
         const cfg = await window.electronAPI?.loadConfig();
         if (cfg) setConfig(cfg);
-        const history = await window.electronAPI?.loadHistory();
-        if (history && Array.isArray(history)) {
-          setMessages(history);
-          log('[Admin] 加载历史 ' + history.length + ' 条');
-        }
         // 加载工具定义（用于展示，工具执行本身在主进程 ai:chat 内完成）
         const tools = await window.electronAPI?.toolsList();
         if (tools) {
           log('[Admin] 可用工具 ' + tools.length + ' 个');
         }
-      } catch (e) {
-        log('[Admin] 初始化失败');
+      } catch (error) {
+        log('[Admin] 初始化失败: ' + errorMessage(error, '主进程无响应'));
       }
     })();
+    void loadHistoryFromMain();
 
     // Web Speech API（备用，whisper.cpp 不可用时）
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
@@ -257,6 +277,9 @@ function App() {
       captureScreenshot();
     });
 
+    // 托盘「设置」= 打开管理端 + 切到设置页（Rust 侧 actions::open_settings 发 open:settings）
+    const unsubOpenSettings = window.electronAPI?.onOpenSettings?.(() => setSettingsOpen(true));
+
     // 检测 ollama 在线状态
     checkOnline();
     const onlineTimer = setInterval(checkOnline, 30000);
@@ -270,6 +293,7 @@ function App() {
       unsubPushToTalk?.();
       unsubConfirm?.();
       unsubShortcutScreenshot?.();
+      unsubOpenSettings?.();
       unsubChunk?.();
       clearInterval(onlineTimer);
     };
@@ -281,8 +305,9 @@ function App() {
       // 由主进程探测所配置的 AI 提供商，渲染端不再直连 ollama（T3.6 收尾）
       const res = await window.electronAPI?.aiTestConnection();
       setOnline(!!res?.success);
-    } catch {
+    } catch (error) {
       setOnline(false);
+      log('[Admin] 在线探测失败: ' + errorMessage(error, '主进程无响应'));
     }
   };
 
@@ -292,7 +317,10 @@ function App() {
 
   // 持久化历史（全量覆盖写）
   const persistHistory = useCallback((msgs: ChatMessage[]) => {
-    window.electronAPI?.saveHistory(msgs).catch(() => {});
+    // 后台落盘是 best-effort：失败不回滚气泡，但必须留痕（合同六.1）
+    void window.electronAPI?.saveHistory(msgs).catch((error) => {
+      log('[Admin] 历史保存失败: ' + errorMessage(error, '主进程无响应'));
+    });
   }, []);
 
   // ---------- 语音打断监听 ----------
@@ -348,7 +376,10 @@ function App() {
       interruptStreamRef.current = null;
     }
     if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-      audioContextRef.current.close().catch(() => {});
+      // 卸载清理：关不掉也不影响下一次播放，留日志即可
+      audioContextRef.current.close().catch((error) => {
+        log('[Admin] 关闭打断监听 AudioContext 失败: ' + errorMessage(error, '未知错误'));
+      });
       audioContextRef.current = null;
     }
     analyserRef.current = null;
@@ -386,10 +417,10 @@ function App() {
         message.success('截图成功');
         sendMessage(`我刚截取了屏幕截图，保存路径: ${result.path}。请帮我分析一下屏幕内容。`);
       } else {
-        message.error('截图失败: ' + (result?.error || '未知错误'));
+        message.error('截图失败: ' + (result?.error || '主进程未返回截图'));
       }
-    } catch (e: any) {
-      message.error('截图错误: ' + e.message);
+    } catch (e) {
+      message.error('截图错误: ' + errorMessage(e, '主进程无响应'));
     } finally {
       setIsCapturing(false);
     }
@@ -415,7 +446,7 @@ function App() {
     });
 
   // ---------- 发送消息（支持MCP工具调用） ----------
-  const sendMessage = async (content: string) => {
+  const sendMessage = async (content: string, images?: string[]) => {
     if (!content.trim() || isThinking) return;
 
     const userMsg: DisplayMessage = {
@@ -430,21 +461,22 @@ function App() {
     setInput('');
     setIsThinking(true);
 
+    const aiMsgId = (Date.now() + 1).toString();
+    // 先插入空气泡，流式 chunk 逐字填充（T3.8）
+    const placeholder: DisplayMessage = {
+      id: aiMsgId,
+      role: 'assistant',
+      content: '',
+      timestamp: new Date().toISOString(),
+    };
+
     try {
-      const aiMsgId = (Date.now() + 1).toString();
       const reqMessages = [
         { role: 'system', content: config.systemPrompt || DEFAULT_CONFIG.systemPrompt },
         ...messages.map((m) => ({ role: m.role, content: m.content })),
-        { role: 'user', content },
+        { role: 'user', content, ...(images?.length ? { images } : {}) },
       ];
 
-      // 先插入空气泡，流式 chunk 逐字填充（T3.8）
-      const placeholder: DisplayMessage = {
-        id: aiMsgId,
-        role: 'assistant',
-        content: '',
-        timestamp: new Date().toISOString(),
-      };
       setMessages([...newMsgs, placeholder]);
       streamMsgIdRef.current = aiMsgId;
       streamBufRef.current = '';
@@ -455,7 +487,6 @@ function App() {
         messages: reqMessages,
         stream: true,
       });
-      streamMsgIdRef.current = null;
 
       const reply =
         response?.content || streamBufRef.current || '抱歉，我无法理解您的问题。';
@@ -470,9 +501,18 @@ function App() {
       setMessages(finalMsgs);
       persistHistory(finalMsgs.map(({ toolCalls: _tc, ...rest }) => rest as ChatMessage));
       speakText(reply);
-    } catch (e: any) {
-      message.error('请求失败: ' + e.message);
+    } catch (error) {
+      // 空气泡不能留在界面上冒充“已回复”：把它替换成可见的失败原因
+      const reason = errorMessage(error, 'AI 服务无响应');
+      message.error('请求失败: ' + reason);
+      const failedMsgs: DisplayMessage[] = [
+        ...newMsgs,
+        { ...placeholder, content: `请求失败：${reason}` },
+      ];
+      setMessages(failedMsgs);
+      persistHistory(failedMsgs.map(({ toolCalls: _tc, ...rest }) => rest as ChatMessage));
     } finally {
+      streamMsgIdRef.current = null;
       setIsThinking(false);
     }
   };
@@ -497,6 +537,7 @@ function App() {
         };
 
         audio.onerror = () => {
+          log('[Admin] TTS 播放错误，文字回复已保留');
           currentAudioRef.current = null;
           isSpeakingRef.current = false;
           setIsSpeaking(false);
@@ -507,10 +548,12 @@ function App() {
         // 启动打断监听
         startInterruptListener();
       } else {
+        log('[Admin] TTS 失败: ' + (ttsData?.error || '语音合成不可用'));
         isSpeakingRef.current = false;
         setIsSpeaking(false);
       }
-    } catch {
+    } catch (error) {
+      log('[Admin] TTS 异常: ' + errorMessage(error, '未知错误'));
       isSpeakingRef.current = false;
       setIsSpeaking(false);
       stopInterruptListener();
@@ -529,15 +572,36 @@ function App() {
       allowAlways: false,
     });
 
-  const handleToolConfirm = (alwaysAllow: boolean) => {
-    // approved 与 alwaysAllow 是两个独立字段（04 §3.4）
-    window.electronAPI?.toolsConfirm(confirmModal.id, true, alwaysAllow && confirmModal.allowAlways);
-    resetConfirmModal();
+  const handleToolConfirm = async (alwaysAllow: boolean) => {
+    if (confirmBusy) return;
+    setConfirmBusy(true);
+    try {
+      // approved 与 alwaysAllow 是两个独立字段（04 §3.4）
+      await window.electronAPI?.toolsConfirm(
+        confirmModal.id,
+        true,
+        alwaysAllow && confirmModal.allowAlways
+      );
+      resetConfirmModal();
+    } catch (error) {
+      // 失败时保留弹窗，用户可以重试或改为拒绝
+      message.error('确认失败：' + errorMessage(error, '主进程无响应'));
+    } finally {
+      setConfirmBusy(false);
+    }
   };
 
-  const handleToolCancel = () => {
-    window.electronAPI?.toolsCancel(confirmModal.id);
-    resetConfirmModal();
+  const handleToolCancel = async () => {
+    if (confirmBusy) return;
+    setConfirmBusy(true);
+    try {
+      await window.electronAPI?.toolsCancel(confirmModal.id);
+      resetConfirmModal();
+    } catch (error) {
+      message.error('取消失败：' + errorMessage(error, '主进程无响应'));
+    } finally {
+      setConfirmBusy(false);
+    }
   };
 
   // ---------- 文件拖入处理 ----------
@@ -560,6 +624,10 @@ function App() {
 
     const files = Array.from(e.dataTransfer.files);
     if (files.length === 0) return;
+    if (isThinking) {
+      message.warning('上一条回复还在生成，请完成后再拖入文件');
+      return;
+    }
 
     for (const file of files) {
       const filePath = (file as any).path || file.name;
@@ -567,47 +635,84 @@ function App() {
       const imageExts = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'];
       const textExts = ['txt', 'md', 'json', 'js', 'ts', 'tsx', 'jsx', 'py', 'java', 'c', 'cpp', 'h', 'css', 'html', 'xml', 'yaml', 'yml', 'toml', 'ini', 'sh', 'bat'];
 
-      if (imageExts.includes(ext)) {
-        // 图片文件: 转base64
-        const result = await window.electronAPI?.fileReadAsBase64(filePath);
-        if (result?.success && result.base64) {
-          sendMessage(`[图片文件: ${file.name}]\n请分析这张图片。`);
+      try {
+        if (imageExts.includes(ext)) {
+          // 图片文件: 读 base64 并真正作为 images 送入 AI（此前读完就丢，只发了一句“请分析图片”）
+          const result = await window.electronAPI?.fileReadAsBase64(filePath);
+          if (result?.success && result.base64) {
+            await sendMessage(`[图片文件: ${file.name}]\n请分析这张图片。`, [result.base64]);
+          } else {
+            message.error(`读取图片失败: ${file.name}${result?.error ? '（' + result.error + '）' : ''}`);
+          }
+        } else if (textExts.includes(ext)) {
+          // 文本文件: 读取内容
+          const result = await window.electronAPI?.fileRead(filePath);
+          if (result?.success && result.content) {
+            const content = result.content.slice(0, 3000);
+            await sendMessage(`[文件: ${file.name}]\n\`\`\`${ext}\n${content}\n\`\`\`\n请帮我分析这个文件。`);
+          } else {
+            message.error(`读取文件失败: ${file.name}${result?.error ? '（' + result.error + '）' : ''}`);
+          }
         } else {
-          message.error(`读取图片失败: ${file.name}`);
+          // 其他文件: 只传文件路径
+          await sendMessage(`[文件: ${file.name}]\n路径: ${filePath}\n请帮我处理这个文件。`);
         }
-      } else if (textExts.includes(ext)) {
-        // 文本文件: 读取内容
-        const result = await window.electronAPI?.fileRead(filePath);
-        if (result?.success && result.content) {
-          const content = result.content.slice(0, 3000);
-          sendMessage(`[文件: ${file.name}]\n\`\`\`${ext}\n${content}\n\`\`\`\n请帮我分析这个文件。`);
-        } else {
-          message.error(`读取文件失败: ${file.name}`);
-        }
-      } else {
-        // 其他文件: 只传文件路径
-        sendMessage(`[文件: ${file.name}]\n路径: ${filePath}\n请帮我处理这个文件。`);
+      } catch (error) {
+        message.error(`处理文件失败: ${file.name}（${errorMessage(error, '读取失败')}）`);
       }
     }
   };
 
   // ---------- Pin 卡片 ----------
   const handlePin = async (msg: DisplayMessage) => {
+    const api = window.electronAPI;
+    if (!api) {
+      message.error('Pin 失败：主进程通道不可用');
+      return;
+    }
     try {
-      await window.electronAPI?.pinCreate(msg.content);
+      await api.pinCreate(msg.content);
       message.success('已钉到桌面');
-    } catch (e: any) {
-      message.error('Pin失败: ' + e.message);
+    } catch (e) {
+      message.error('Pin失败: ' + errorMessage(e, '主进程无响应'));
     }
   };
 
-  const clearHistory = async () => {
-    await window.electronAPI?.clearHistory();
-    setMessages([]);
-    message.success('已清空对话');
+  const clearHistory = () => {
+    if (messages.length === 0) return;
+    // 破坏性操作：确认文案带数量与“不可恢复”，默认焦点在取消（合同三）
+    Modal.confirm({
+      title: '清空全部对话记录？',
+      content: `将删除 ${messages.length} 条对话，不可恢复。`,
+      okText: '清空',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      autoFocusButton: 'cancel',
+      centered: true,
+      onOk: async () => {
+        try {
+          await window.electronAPI?.clearHistory();
+          setMessages([]);
+          setHistoryError('');
+          message.success(`已清空 ${messages.length} 条对话`);
+        } catch (error) {
+          message.error('清空失败：' + errorMessage(error, '主进程无响应'));
+        }
+      },
+    });
   };
 
-  const toggleMode = () => window.electronAPI?.toggleWindow('pet');
+  const toggleMode = () => {
+    const api = window.electronAPI;
+    if (!api) {
+      message.error('切换失败：主进程通道不可用');
+      return;
+    }
+    api.toggleWindow('pet').catch((error) => {
+      log('[Admin] 切换萌宠模式失败: ' + errorMessage(error, '主进程无响应'));
+      message.error('切换失败：' + errorMessage(error, '主进程无响应'));
+    });
+  };
 
   // ---------- 渲染工具调用状态 ----------
   const renderToolCalls = (toolCalls?: ToolCallState[]) => {
@@ -700,19 +805,19 @@ function App() {
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <Tooltip title="清空对话">
-              <Button shape="circle" icon={<DeleteOutlined />} onClick={clearHistory} disabled={messages.length === 0} />
+              <Button aria-label="清空对话" shape="circle" icon={<DeleteOutlined />} onClick={clearHistory} disabled={messages.length === 0} />
             </Tooltip>
             <Tooltip title="快捷指令">
-              <Button shape="circle" icon={<ToolOutlined />} onClick={() => setQuickCommandOpen(true)} />
+              <Button aria-label="快捷指令" shape="circle" icon={<ToolOutlined />} onClick={() => setQuickCommandOpen(true)} />
             </Tooltip>
             <Tooltip title="成就系统">
-              <Button shape="circle" icon={<StarOutlined />} onClick={() => setAchievementOpen(true)} />
+              <Button aria-label="成就系统" shape="circle" icon={<StarOutlined />} onClick={() => setAchievementOpen(true)} />
             </Tooltip>
             <Tooltip title="场景特效">
-              <Button shape="circle" icon={<SunOutlined />} onClick={() => setSceneryOpen(true)} />
+              <Button aria-label="场景特效" shape="circle" icon={<SunOutlined />} onClick={() => setSceneryOpen(true)} />
             </Tooltip>
             <Tooltip title="设置">
-              <Button shape="circle" icon={<SettingOutlined />} onClick={() => setSettingsOpen(true)} />
+              <Button aria-label="设置" shape="circle" icon={<SettingOutlined />} onClick={() => setSettingsOpen(true)} />
             </Tooltip>
             <Tooltip title="切换到萌宠模式">
               <Button type="primary" icon={<SwapOutlined />} onClick={toggleMode}>
@@ -754,7 +859,26 @@ function App() {
             </div>
           )}
 
-          {messages.length === 0 ? (
+          {historyLoading ? (
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 12 }}>
+              <Spin size="large" />
+              <span style={{ color: '#999' }}>加载对话历史...</span>
+            </div>
+          ) : messages.length === 0 && historyError ? (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
+              <Alert
+                type="error"
+                showIcon
+                message="对话历史加载失败"
+                description={historyError}
+                action={
+                  <Button size="small" onClick={() => void loadHistoryFromMain()}>
+                    重试
+                  </Button>
+                }
+              />
+            </div>
+          ) : messages.length === 0 ? (
             <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
               <div
                 style={{
@@ -828,8 +952,17 @@ function App() {
                       {msg.role === 'assistant' && (
                         <Tooltip title="钉到桌面">
                           <PushpinOutlined
+                            role="button"
+                            tabIndex={0}
+                            aria-label="钉到桌面"
                             style={{ fontSize: 11, color: '#666', cursor: 'pointer' }}
-                            onClick={() => handlePin(msg)}
+                            onClick={() => void handlePin(msg)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' || e.key === ' ') {
+                                e.preventDefault();
+                                void handlePin(msg);
+                              }
+                            }}
                           />
                         </Tooltip>
                       )}
@@ -862,6 +995,7 @@ function App() {
           <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
             <Tooltip title={isListening ? '停止录音' : '语音输入'}>
               <Button
+                aria-label={isListening ? '停止录音' : '语音输入'}
                 shape="circle"
                 size="large"
                 danger={isListening}
@@ -872,6 +1006,7 @@ function App() {
             </Tooltip>
             <Tooltip title="截图分析">
               <Button
+                aria-label="截图分析"
                 shape="circle"
                 size="large"
                 icon={<CameraOutlined />}
@@ -896,6 +1031,7 @@ function App() {
               type="primary"
               shape="circle"
               size="large"
+              aria-label="发送消息"
               icon={<SendOutlined />}
               onClick={() => sendMessage(input)}
               disabled={!input.trim() || isThinking}
@@ -903,8 +1039,17 @@ function App() {
             {isSpeaking && (
               <Tooltip title="点击打断">
                 <SoundOutlined
+                  role="button"
+                  tabIndex={0}
+                  aria-label="打断语音播放"
                   style={{ color: accent, fontSize: 18, animation: 'adminPulse 1s infinite', cursor: 'pointer' }}
                   onClick={handleVoiceInterrupt}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      handleVoiceInterrupt();
+                    }
+                  }}
                 />
               </Tooltip>
             )}
@@ -920,16 +1065,18 @@ function App() {
             </span>
           }
           open={confirmModal.visible}
-          onCancel={handleToolCancel}
+          onCancel={() => { void handleToolCancel(); }}
+          closable={!confirmBusy}
+          maskClosable={false}
           footer={[
-            <Button key="cancel" onClick={handleToolCancel}>
+            <Button key="cancel" autoFocus disabled={confirmBusy} onClick={() => { void handleToolCancel(); }}>
               拒绝
             </Button>,
-            <Button key="allow" type="primary" onClick={() => handleToolConfirm(false)}>
+            <Button key="allow" type="primary" loading={confirmBusy} onClick={() => { void handleToolConfirm(false); }}>
               允许
             </Button>,
             confirmModal.allowAlways ? (
-              <Button key="always" type="primary" danger onClick={() => handleToolConfirm(true)}>
+              <Button key="always" type="primary" danger disabled={confirmBusy} onClick={() => { void handleToolConfirm(true); }}>
                 始终允许
               </Button>
             ) : null,
@@ -960,16 +1107,25 @@ function App() {
         </Modal>
 
         <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} onSave={setConfig} />
-        
-        <QuickCommandPanel open={quickCommandOpen} onClose={() => setQuickCommandOpen(false)} />
-        <AchievementPanel open={achievementOpen} onClose={() => setAchievementOpen(false)} />
-        <SceneryPanel open={sceneryOpen} onClose={() => setSceneryOpen(false)} />
+
+        {/* 三个面板内部只有 Card，没有自己的浮层；不套 Modal 时按钮只改 state、界面无变化 */}
+        <Modal open={quickCommandOpen} onCancel={() => setQuickCommandOpen(false)} footer={null} width={900}>
+          <QuickCommandPanel open={quickCommandOpen} onClose={() => setQuickCommandOpen(false)} />
+        </Modal>
+        <Modal open={achievementOpen} onCancel={() => setAchievementOpen(false)} footer={null} width={1000}>
+          <AchievementPanel open={achievementOpen} onClose={() => setAchievementOpen(false)} />
+        </Modal>
+        <Modal open={sceneryOpen} onCancel={() => setSceneryOpen(false)} footer={null} width={900}>
+          <SceneryPanel open={sceneryOpen} onClose={() => setSceneryOpen(false)} />
+        </Modal>
 
         <div style={{ position: 'absolute', top: 80, right: 16, width: 360, zIndex: 10 }}>
           <MeetingPanel accent={accent} />
         </div>
 
         <style>{`
+          /* 默认 body 有 8px 外边距，会让 100vh 布局多出 16px 并冒出滚动条 */
+          html, body, #root { height: 100%; margin: 0; }
           @keyframes adminFloat {
             0%, 100% { transform: translateY(0); }
             50% { transform: translateY(-8px); }

@@ -9,12 +9,28 @@ use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Wry};
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
+
 use crate::{actions, runtime, shortcuts, state};
 
 pub const TRAY_ID: &str = "z-bot-tray";
 
 /// 便签条目前 28 个字符（Electron 是 slice(0,28)，这里按字符切，中文不会被切成半个）
 const NOTE_LABEL_CHARS: usize = 28;
+
+/// 「清空全部笔记」是破坏性操作：第一次点击只进入确认态，5 秒内再点一次才真清空。
+/// 托盘菜单没有原生确认框，用两段式菜单满足合同的「二次确认」，并自动过期避免误触。
+static CLEAR_NOTES_ARMED: AtomicBool = AtomicBool::new(false);
+const CLEAR_NOTES_CONFIRM_WINDOW: Duration = Duration::from_secs(5);
+
+fn clear_notes_label(count: usize, armed: bool) -> String {
+    if armed {
+        format!("⚠️ 再点一次确认清空 {count} 条笔记")
+    } else {
+        "清空全部笔记".to_string()
+    }
+}
 
 fn note_label(content: &str) -> String {
     // 对应 Electron 的 replace(/\s+/g,' ')：连续空白压成一个空格，顺带去掉首尾
@@ -63,17 +79,19 @@ fn notes_submenu(app: &AppHandle) -> tauri::Result<Submenu<Wry>> {
         )?)?;
     }
     sub.append(&PredefinedMenuItem::separator(app)?)?;
+    // 子菜单只列最近 8 条，清空确认要报「全部」的条数，所以再读一次全量列表
+    let total = state::read_list(state::pins_file()).len();
     sub.append(&MenuItem::with_id(
         app,
         "note-count",
-        format!("共 {} 条 · 点击复制", notes.len()),
+        format!("共 {total} 条 · 点击复制"),
         false,
         None::<&str>,
     )?)?;
     sub.append(&MenuItem::with_id(
         app,
         "clear-notes",
-        "清空全部笔记",
+        clear_notes_label(total, CLEAR_NOTES_ARMED.load(Ordering::SeqCst)),
         true,
         None::<&str>,
     )?)?;
@@ -122,12 +140,18 @@ pub fn build_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     )?)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
     menu.append(&notes_submenu(app)?)?;
+    // 非 Windows 没有 SetWindowDisplayAffinity 的对应物（runtime::apply_affinity 返回 Err），
+    // 菜单项如实禁用并标注平台，避免勾选后"看起来开了、实际没生效"。
     menu.append(&CheckMenuItem::with_id(
         app,
         "stealth",
-        "🕵️ 截图隐身",
-        true,
-        runtime::is_stealth(),
+        if cfg!(windows) {
+            "🕵️ 截图隐身"
+        } else {
+            "🕵️ 截图隐身（仅 Windows）"
+        },
+        cfg!(windows),
+        cfg!(windows) && runtime::is_stealth(),
         None::<&str>,
     )?)?;
     menu.append(&CheckMenuItem::with_id(
@@ -199,6 +223,20 @@ fn copy_note_by_id(app: &AppHandle, note_id: &str) {
     }
 }
 
+/// 进入「清空笔记」确认态：改菜单文案，并在 5 秒后自动解除（期间没再点就当放弃）。
+fn arm_clear_notes(app: &AppHandle) {
+    CLEAR_NOTES_ARMED.store(true, Ordering::SeqCst);
+    refresh_menu(app);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(CLEAR_NOTES_CONFIRM_WINDOW);
+        // swap 保证只有真正驻留到期的确认态才会被撤销并刷新一次菜单
+        if CLEAR_NOTES_ARMED.swap(false, Ordering::SeqCst) {
+            refresh_menu(&app);
+        }
+    });
+}
+
 /// 菜单项 id → 动作。与 trayContext() 的回调一一对应，做完就重建菜单。
 pub fn handle_menu_event(app: &AppHandle, id: &str) -> bool {
     match id {
@@ -208,7 +246,18 @@ pub fn handle_menu_event(app: &AppHandle, id: &str) -> bool {
         "voice-stop" => actions::broadcast(app, "voice:stop"),
         "settings" => actions::open_settings(app),
         "clear-notes" => {
-            actions::clear_notes();
+            let total = state::read_list(state::pins_file()).len();
+            if total == 0 {
+                // 已经没有可清空的笔记，不进入确认态
+                return false;
+            }
+            // 清空不可恢复：第一次点击只进入确认态，第二次（5 秒内）才真正执行
+            if CLEAR_NOTES_ARMED.swap(false, Ordering::SeqCst) {
+                actions::clear_notes();
+            } else {
+                arm_clear_notes(app);
+                return false; // arm_clear_notes 内部已刷新菜单
+            }
         }
         "stealth" => {
             actions::set_stealth(app, !runtime::is_stealth());
@@ -285,6 +334,15 @@ pub fn refresh_menu(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clear_notes_label_reports_count_only_when_armed() {
+        assert_eq!(clear_notes_label(3, false), "清空全部笔记");
+        let armed = clear_notes_label(3, true);
+        assert!(armed.contains('3'), "确认文案要报条数: {armed}");
+        assert!(armed.contains("再点一次确认"));
+        assert!(armed.starts_with('⚠'));
+    }
 
     #[test]
     fn note_label_collapses_whitespace_and_truncates() {

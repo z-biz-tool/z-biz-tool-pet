@@ -106,6 +106,7 @@ const EVENTS: Record<string, string> = {
   onMeetingRollingSummary: 'meeting:rollingSummary',
   onMeetingSegment: 'meeting:segment',
   onMeetingState: 'meeting:state',
+  onOpenSettings: 'open:settings',
   onPushToTalkStart: 'voice:pushToTalkStart',
   onPushToTalkStop: 'voice:pushToTalkStop',
   onShortcutScreenshot: 'shortcut:screenshot',
@@ -169,7 +170,11 @@ impl.onApplySkin = (cb: (payload?: unknown) => void) => {
           const skin = skins.find((s) => s.id === skinId);
           if (skin && !cancelled) cb(skin);
         })
-        .catch(() => {});
+        .catch((error) => {
+          // 皮肤订阅是 best-effort：查不到就忽略这次推送（下一条事件仍会处理），
+          // 但必须留痕，否则“换了皮肤没反应”会完全无从排查
+          console.warn('[Z-Bot] 皮肤推送回查失败:', error);
+        });
     }),
     listen<SkinRecord>('pet:applySkinData', (event) => {
       if (!cancelled) cb(event.payload);
@@ -185,7 +190,11 @@ impl.onApplySkin = (cb: (payload?: unknown) => void) => {
 // 这里 invoke 之后忽略回执 —— 打包后的 exe 没有控制台，Rust 侧会把它并进 ~/.z-bot/logs/app.log。
 impl.log = (msg: unknown) => {
   console.log('[Z-Bot]', msg);
-  void invoke('console_log', { message: String(msg) }).catch(() => {});
+  void invoke('console_log', { message: String(msg) }).catch((error) => {
+    // 日志落盘是 best-effort：渲染层已经 console.log 过；这里只补一条本地告警，
+    // 不能再走 bridge/message，否则失败会递归刷屏
+    console.warn('[Z-Bot] 日志写入主进程失败:', error);
+  });
 };
 
 const bridge = new Proxy(impl, {
