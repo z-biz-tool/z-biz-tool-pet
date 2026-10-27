@@ -1,9 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Row, Col, Button, Typography, ColorPicker, Space, Modal, Form, Input, message } from 'antd';
-import { SunOutlined, MoonOutlined, ThunderboltOutlined, CloudOutlined } from '@ant-design/icons';
+import { Row, Col, Button, ColorPicker, Modal, Form, Input, message } from 'antd';
 import { errorMessage } from '../shared/interaction';
-
-const { Title, Text } = Typography;
 
 interface Scenery {
   id: string;
@@ -33,6 +30,10 @@ const PRESET_SCENERIES: Scenery[] = [
   { id: 'rain', name: '雨天 mood', description: '雨天的宁静氛围', type: 'rain', backgroundColor: 'linear-gradient(135deg, #4A4A5A 0%, #2C3E50 100%)', particleColor: '#87CEEB', enabled: true },
   { id: 'sunset', name: '夕阳余晖', description: '温暖的黄昏时光', type: 'sunset', backgroundColor: 'linear-gradient(135deg, #FF6B6B 0%, #FFD93D 50%, #6BCB77 100%)', particleColor: '#FFA500', enabled: true },
 ];
+
+const PARTICLE_LABEL: Record<string, string> = {
+  heart: '爱心', star: '星光', music: '音符', sparkle: '闪亮', bounce: '气球', float: '云朵',
+};
 
 const PARTICLE_TYPES: ParticleConfig[] = [
   { id: 'heart', type: 'heart', content: '💕', enabled: true },
@@ -136,72 +137,52 @@ const SceneryPanel: React.FC<SceneryPanelProps> = ({ open }) => {
 
   return (
     <>
-      <Card title="场景切换">
-        <Text type="secondary" style={{ fontSize: 12 }}>
-          场景不再铺满看板娘窗口（那会变成桌面上的一块色卡），改为她身后的环境光与粒子色；
-          选中后立刻在宠物窗口生效。
-        </Text>
-        <Title level={5} style={{ marginTop: 12 }}>预设场景</Title>
-        <Row gutter={16}>
+      <section className="pnl-sec">
+        <div className="pnl-sec-h">环境光</div>
+        <p className="pnl-hint" style={{ marginBottom: 12 }}>
+          场景不再铺满看板娘窗口（那会变成桌面上的一块色卡），改为她身后的环境光与粒子色；选中即生效。
+        </p>
+        <Row gutter={[12, 12]}>
           {PRESET_SCENERIES.map((scenery) => (
-            <Col span={6} key={scenery.id}>
-              <Card
-                hoverable
-                role="button"
-                tabIndex={0}
+            <Col xs={12} sm={6} key={scenery.id}>
+              <button
+                type="button"
+                className={`pnl-scene ${currentScenery.id === scenery.id ? 'on' : ''}`}
                 aria-label={`切换场景 ${scenery.name}`}
-                style={{
-                  backgroundColor: scenery.backgroundColor,
-                  border: currentScenery.id === scenery.id ? '2px solid #1890ff' : '2px solid transparent',
-                }}
+                aria-pressed={currentScenery.id === scenery.id}
                 onClick={() => handleScenerySelect(scenery)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    handleScenerySelect(scenery);
-                  }
-                }}
               >
-                <Space direction="vertical" align="center">
-                  <span style={{ fontSize: 24 }} aria-hidden="true">
-                    {scenery.type === 'day' && <SunOutlined />}
-                    {scenery.type === 'night' && <MoonOutlined />}
-                    {scenery.type === 'rain' && <ThunderboltOutlined />}
-                    {scenery.type === 'sunset' && <CloudOutlined />}
-                  </span>
-                  <Text strong>{scenery.name}</Text>
-                  <Text type="secondary" style={{ fontSize: 11 }}>{scenery.description}</Text>
-                </Space>
-              </Card>
+                <span className="pnl-scene-swatch" style={{ background: scenery.backgroundColor }} />
+                <span className="pnl-scene-name">{scenery.name}</span>
+                <span className="pnl-scene-desc">{scenery.description}</span>
+              </button>
             </Col>
           ))}
         </Row>
-        <Button type="link" onClick={() => setIsCustomModalOpen(true)} style={{ marginTop: 16 }}>
+        <Button type="text" size="small" onClick={() => setIsCustomModalOpen(true)} style={{ marginTop: 12 }}>
           + 自定义场景
         </Button>
-      </Card>
+      </section>
 
-      <Card title="粒子特效" style={{ marginTop: 16 }}>
-        <Title level={5}>粒子类型</Title>
-        <Row gutter={16}>
+      <section className="pnl-sec">
+        <div className="pnl-sec-h">粒子特效</div>
+        <Row gutter={[12, 12]}>
           {particles.map((particle) => (
-            <Col span={4} key={particle.id}>
-              <Button
-                type={particle.enabled ? 'primary' : 'default'}
+            <Col xs={8} sm={4} key={particle.id}>
+              <button
+                type="button"
+                className={`pnl-particle ${particle.enabled ? 'on' : ''}`}
                 aria-label={`粒子特效 ${particle.type}`}
                 aria-pressed={particle.enabled}
-                style={{ width: '100%', height: 80, fontSize: 24 }}
                 onClick={() => handleParticleToggle(particle.id)}
               >
                 {particle.content}
-              </Button>
-              <div style={{ textAlign: 'center', marginTop: 4, fontSize: 12 }}>
-                {particle.type}
-              </div>
+              </button>
+              <div className="pnl-particle-label">{PARTICLE_LABEL[particle.type] ?? particle.type}</div>
             </Col>
           ))}
         </Row>
-      </Card>
+      </section>
 
       <Modal
         title="自定义场景"

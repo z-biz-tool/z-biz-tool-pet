@@ -34,8 +34,9 @@ export const DEFAULT_CONFIG = {
   sttUrl: STT_URL,
   ttsUrl: TTS_URL,
   voiceSpeed: 1.0,
-  petName: 'Z-Bot 小猫咪',
-  themeColor: '#722ed1',
+  // 留空表示「用当前角色的名字」（茉白 / 夜汐 …）；用户改名后才写死在配置里
+  petName: '',
+  themeColor: '#4ecdc4',
   aiProvider: 'ollama',
   aiApiKey: '',
   aiBaseUrl: OLLAMA_URL,
@@ -45,7 +46,7 @@ export const DEFAULT_CONFIG = {
 
 /** 空状态建议问题 */
 export const SUGGESTED_QUESTIONS = [
-  '你好呀，今天过得怎么样？🐱',
+  '你好呀，今天过得怎么样？',
   '帮我写一段 Python 排序代码',
   '把"我很开心"翻译成英文和日文',
   '提醒我下午3点开会',

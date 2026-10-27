@@ -1,11 +1,23 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Drawer, Form, Input, InputNumber, Button, Divider, Select, message, Space, Typography, Card, Tag, Popconfirm } from 'antd';
-import { SaveOutlined, ReloadOutlined, DeleteOutlined, ApiOutlined, CheckCircleOutlined, CloseCircleOutlined, LoadingOutlined, EyeOutlined } from '@ant-design/icons';
+import { Form, Input, InputNumber, Button, Divider, Select, message, Tag, Popconfirm } from 'antd';
+import {
+  SaveOutlined,
+  ReloadOutlined,
+  DeleteOutlined,
+  ApiOutlined,
+  CheckCircleOutlined,
+  CloseCircleOutlined,
+  CloseOutlined,
+  LoadingOutlined,
+  EyeOutlined,
+  SettingOutlined,
+  PlusOutlined,
+} from '@ant-design/icons';
 import { DEFAULT_CONFIG, SCENE_PROMPTS } from '../shared/prompts';
 import { errorMessage } from '../shared/interaction';
+import './admin.css';
 
 const { TextArea } = Input;
-const { Text } = Typography;
 
 export interface SettingsPanelProps {
   open: boolean;
@@ -14,6 +26,7 @@ export interface SettingsPanelProps {
 }
 
 const THEME_COLORS = [
+  { label: 'zBiz 薄荷（默认）', value: '#4ecdc4' },
   { label: '魅影紫', value: '#722ed1' },
   { label: '极客蓝', value: '#1677ff' },
   { label: '薄荷绿', value: '#52c41a' },
@@ -74,6 +87,9 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose, onSave }) 
   const [updateText, setUpdateText] = useState<string>('尚未检查');
   const [updateAvailable, setUpdateAvailable] = useState(false);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+  // 未保存提示：468px 的侧栏里「保存」在底部，滚动到中间时完全看不见，
+  // 得让用户知道自己改过东西（此前改完直接关掉窗口 = 白改）
+  const [dirty, setDirty] = useState(false);
 
   // 2026-10-21：ref 转发层，修 ESLint 报的 "useEffect has a missing dependency: 'loadConfig'"。
   // 原来 `loadConfig` 是本文件里**普通函数**（不是 useCallback），且定义在调用它的
@@ -211,6 +227,8 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose, onSave }) 
       message.warning('配置读取失败，已载入默认值：' + errorMessage(e, '主进程无响应'));
     } finally {
       setLoading(false);
+      // setFieldsValue 不会触发 onValuesChange，但要显式清一次：从磁盘读回来的值就是「已保存」状态
+      setDirty(false);
     }
   };
   // ref 转发：让 76 行的 effect 能调到最新实现
@@ -228,6 +246,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose, onSave }) 
       onSave(configToSave);
       reportApplied(saved?.applied);
       await loadRuntimeOptions();
+      setDirty(false);
       onClose();
     } catch (e: any) {
       // validateFields 的 reject 是表单校验结果，不是“保存失败”，不能混为一谈
@@ -402,302 +421,371 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose, onSave }) 
   const currentProvider = providers.find((p) => p.id === currentProviderId);
 
   return (
-    <Drawer
-      title="⚙️ 设置"
-      placement="right"
-      width={520}
-      open={open}
-      onClose={onClose}
-      destroyOnClose={false}
-      extra={
-        <Space>
-          <Button icon={<ReloadOutlined />} onClick={handleReset} size="small">
-            重置
-          </Button>
-          <Button type="primary" icon={<SaveOutlined />} onClick={handleSave} size="small" loading={saving} disabled={loading}>
-            保存
-          </Button>
-        </Space>
-      }
-    >
-      <Form form={form} layout="vertical" initialValues={DEFAULT_CONFIG}>
-        {/* ===== AI 提供商设置 ===== */}
-        <Divider titlePlacement="left" plain>
-          🤖 AI 提供商
-        </Divider>
+    <aside className={`adm-side ${open ? 'is-open' : ''}`} aria-label="设置面板" inert={!open}>
+      <div className="adm-side-head">
+        <span className="adm-side-head-ico">
+          <SettingOutlined />
+        </span>
+        <span className="adm-side-title">设置</span>
+        {dirty && <span className="adm-dirty">未保存</span>}
+        <button type="button" className="adm-iconbtn" aria-label="关闭设置" onClick={onClose}>
+          <CloseOutlined />
+        </button>
+      </div>
 
-        <Form.Item label="当前提供商" name="aiProvider">
-          <Select
-            onChange={handleProviderChange}
-            options={providers.map((p) => ({
-              label: (
-                <span>
-                  {p.name}
-                  {p.supportsVision && <Tag color="green" style={{ marginLeft: 6, fontSize: 10 }}>Vision</Tag>}
-                </span>
-              ),
-              value: p.id,
-            }))}
-          />
-        </Form.Item>
-
-        {/* 当前提供商信息卡片 */}
-        {currentProvider && (
-          <Card
-            size="small"
-            style={{ marginBottom: 16, background: 'rgba(255,255,255,0.04)', borderColor: 'rgba(255,255,255,0.1)' }}
-            extra={
-              currentProvider.id !== 'ollama' ? (
-                <Popconfirm
-                  title={`删除提供商「${currentProvider.name}」？`}
-                  description="保存设置后生效，已写入的 API Key 会一并移除。"
-                  okText="删除"
-                  cancelText="取消"
-                  okButtonProps={{ danger: true }}
-                  onConfirm={() => handleDeleteProvider(currentProvider.id)}
-                >
-                  <Button type="text" danger size="small" icon={<DeleteOutlined />} aria-label={`删除提供商 ${currentProvider.name}`} />
-                </Popconfirm>
-              ) : null
-            }
-          >
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
-              <Tag>{currentProvider.type.toUpperCase()}</Tag>
-              {currentProvider.supportsVision && <Tag color="green" icon={<EyeOutlined />}>视觉理解</Tag>}
-              {currentProvider.supportsStreaming && <Tag color="blue">流式</Tag>}
-              {currentProvider.supportsTools && <Tag color="orange">工具调用</Tag>}
+      <div className="adm-side-body">
+        <Form form={form} layout="vertical" initialValues={DEFAULT_CONFIG} onValuesChange={() => setDirty(true)}>
+          {/* ===== AI 提供商 ===== */}
+          <section className="adm-sec">
+            <div className="adm-sec-h">
+              <div>
+                <div className="adm-sec-name">AI 提供商</div>
+                <div className="adm-sec-desc">她由谁驱动：本地 Ollama，或任意 OpenAI 兼容接口</div>
+              </div>
             </div>
-          </Card>
-        )}
+            <div className="adm-sec-body">
+              <Form.Item label="当前提供商" name="aiProvider">
+                <Select
+                  onChange={handleProviderChange}
+                  options={providers.map((p) => ({
+                    label: p.name,
+                    value: p.id,
+                  }))}
+                  optionRender={(option) => {
+                    const p = providers.find((x) => x.id === option.value);
+                    return (
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ flex: 1, minWidth: 0 }}>{option.label}</span>
+                        {p?.supportsVision && <Tag color="green" style={{ margin: 0, fontSize: 10 }}>视觉</Tag>}
+                      </span>
+                    );
+                  }}
+                />
+              </Form.Item>
 
-        <Form.Item label="Base URL" name="aiBaseUrl">
-          <Input
-            placeholder="https://api.openai.com"
-            onChange={() => { syncProviderFromForm(); setConnectionResult(null); }}
-          />
-        </Form.Item>
+              {currentProvider && (
+                <div className="adm-tagrow">
+                  <Tag style={{ margin: 0 }}>{currentProvider.type.toUpperCase()}</Tag>
+                  {currentProvider.supportsVision && (
+                    <Tag color="green" icon={<EyeOutlined />} style={{ margin: 0 }}>
+                      视觉理解
+                    </Tag>
+                  )}
+                  {currentProvider.supportsStreaming && (
+                    <Tag color="blue" style={{ margin: 0 }}>
+                      流式
+                    </Tag>
+                  )}
+                  {currentProvider.supportsTools && (
+                    <Tag color="orange" style={{ margin: 0 }}>
+                      工具调用
+                    </Tag>
+                  )}
+                  {currentProvider.id !== 'ollama' && (
+                    <Popconfirm
+                      title={`删除提供商「${currentProvider.name}」？`}
+                      description="保存设置后生效，已写入的 API Key 会一并移除。"
+                      okText="删除"
+                      cancelText="取消"
+                      okButtonProps={{ danger: true }}
+                      onConfirm={() => handleDeleteProvider(currentProvider.id)}
+                    >
+                      <Button
+                        type="text"
+                        danger
+                        size="small"
+                        icon={<DeleteOutlined />}
+                        aria-label={`删除提供商 ${currentProvider.name}`}
+                        style={{ marginLeft: 'auto' }}
+                      />
+                    </Popconfirm>
+                  )}
+                </div>
+              )}
 
-        <Form.Item label="API Key" name="aiApiKey">
-          <Input.Password
-            placeholder="sk-..."
-            onChange={() => { syncProviderFromForm(); setConnectionResult(null); }}
-          />
-        </Form.Item>
+              <Form.Item label="Base URL" name="aiBaseUrl">
+                <Input
+                  placeholder="https://api.openai.com"
+                  onChange={() => {
+                    syncProviderFromForm();
+                    setConnectionResult(null);
+                  }}
+                />
+              </Form.Item>
 
-        <Form.Item label="模型" name="aiModel">
-          <Select
-            showSearch
-            placeholder="选择或输入模型名称"
-            options={availableModels.map((m) => ({ label: m, value: m }))}
-            onChange={() => syncProviderFromForm()}
-            dropdownRender={(menu) => (
-              <>
-                {menu}
-                <Divider style={{ margin: '8px 0' }} />
+              <Form.Item label="API Key" name="aiApiKey" extra={currentProvider?.type === 'ollama' ? '本地服务通常不需要，留空即可' : undefined}>
+                <Input.Password
+                  placeholder="sk-..."
+                  onChange={() => {
+                    syncProviderFromForm();
+                    setConnectionResult(null);
+                  }}
+                />
+              </Form.Item>
+
+              <Form.Item label="模型" name="aiModel">
+                <Select
+                  showSearch
+                  placeholder="选择或输入模型名称"
+                  options={availableModels.map((m) => ({ label: m, value: m }))}
+                  onChange={() => syncProviderFromForm()}
+                  dropdownRender={(menu) => (
+                    <>
+                      {menu}
+                      <Divider style={{ margin: '6px 0' }} />
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={fetchingModels ? <LoadingOutlined /> : <ReloadOutlined />}
+                        onClick={handleFetchModels}
+                        loading={fetchingModels}
+                        style={{ margin: 4, width: 'calc(100% - 8px)' }}
+                      >
+                        {fetchingModels ? '获取中…' : '刷新模型列表'}
+                      </Button>
+                    </>
+                  )}
+                />
+              </Form.Item>
+
+              <div className="adm-grid2">
                 <Button
-                  type="link"
-                  icon={fetchingModels ? <LoadingOutlined /> : <ReloadOutlined />}
-                  onClick={handleFetchModels}
-                  loading={fetchingModels}
-                  style={{ padding: '4px 8px', width: '100%' }}
+                  icon={
+                    testingConnection ? (
+                      <LoadingOutlined />
+                    ) : connectionResult?.success ? (
+                      <CheckCircleOutlined />
+                    ) : connectionResult?.success === false ? (
+                      <CloseCircleOutlined />
+                    ) : (
+                      <ApiOutlined />
+                    )
+                  }
+                  onClick={handleTestConnection}
+                  loading={testingConnection}
+                  type={connectionResult?.success ? 'primary' : 'default'}
+                  danger={connectionResult?.success === false}
+                  block
                 >
-                  {fetchingModels ? '获取中...' : '刷新模型列表'}
+                  测试连接
                 </Button>
-              </>
-            )}
-          />
-        </Form.Item>
+                <Select
+                  placeholder="添加提供商"
+                  suffixIcon={<PlusOutlined />}
+                  style={{ width: '100%' }}
+                  onChange={handleProviderTypeChange}
+                  value={undefined}
+                  options={PROVIDER_TYPE_OPTIONS}
+                />
+              </div>
 
-        <Space style={{ marginBottom: 16, width: '100%', justifyContent: 'center' }}>
-          <Button
-            icon={testingConnection ? <LoadingOutlined /> : connectionResult?.success ? <CheckCircleOutlined /> : connectionResult?.success === false ? <CloseCircleOutlined /> : <ApiOutlined />}
-            onClick={handleTestConnection}
-            loading={testingConnection}
-            type={connectionResult?.success ? 'primary' : 'default'}
-            danger={connectionResult?.success === false}
-          >
-            测试连接
-          </Button>
-          <Select
-            placeholder="添加新提供商"
-            style={{ width: 180 }}
-            onChange={handleProviderTypeChange}
-            value={undefined}
-            options={PROVIDER_TYPE_OPTIONS}
-          />
-        </Space>
+              {connectionResult && (
+                <div className={`adm-callout ${connectionResult.success ? 'ok' : 'err'}`} style={{ marginTop: 10 }}>
+                  {connectionResult.success ? '连接成功，模型可用' : `连接失败：${connectionResult.error}`}
+                </div>
+              )}
+            </div>
+          </section>
 
-        {connectionResult && (
-          <div style={{
-            marginBottom: 16,
-            padding: '8px 12px',
-            borderRadius: 8,
-            background: connectionResult.success ? 'rgba(82,196,26,0.1)' : 'rgba(245,34,45,0.1)',
-            border: `1px solid ${connectionResult.success ? 'rgba(82,196,26,0.3)' : 'rgba(245,34,45,0.3)'}`,
-          }}>
-            <Text type={connectionResult.success ? 'success' : 'danger'} style={{ fontSize: 12 }}>
-              {connectionResult.success ? '✅ 连接成功' : `❌ 连接失败: ${connectionResult.error}`}
-            </Text>
-          </div>
-        )}
+          {/* ===== 对话 ===== */}
+          <section className="adm-sec">
+            <div className="adm-sec-h">
+              <div>
+                <div className="adm-sec-name">对话</div>
+                <div className="adm-sec-desc">人设与行为边界都写在这里</div>
+              </div>
+            </div>
+            <div className="adm-sec-body">
+              <Form.Item label="场景模板">
+                <Select
+                  placeholder="选一个现成的人设快速填充"
+                  onChange={handleSceneChange}
+                  options={SCENE_PROMPTS.map((s) => ({
+                    label: `${s.icon} ${s.label} · ${s.description}`,
+                    value: s.key,
+                  }))}
+                  allowClear
+                />
+              </Form.Item>
+              <Form.Item
+                label="系统提示词"
+                name="systemPrompt"
+                rules={[{ required: true, message: '请输入系统提示词' }]}
+              >
+                <TextArea rows={5} placeholder="定义她的身份、语气与边界…" />
+              </Form.Item>
+            </div>
+          </section>
 
-        {/* ===== 系统提示词 ===== */}
-        <Divider titlePlacement="left" plain>
-          💬 对话设置
-        </Divider>
-        <Form.Item label="系统提示词模板">
-          <Select
-            placeholder="选择场景模板快速填充"
-            onChange={handleSceneChange}
-            options={SCENE_PROMPTS.map((s) => ({
-              label: `${s.icon} ${s.label} - ${s.description}`,
-              value: s.key,
-            }))}
-            allowClear
-          />
-        </Form.Item>
-        <Form.Item
-          label="系统提示词内容"
-          name="systemPrompt"
-          rules={[{ required: true, message: '请输入系统提示词' }]}
+          {/* ===== 语音 ===== */}
+          <section className="adm-sec">
+            <div className="adm-sec-h">
+              <div>
+                <div className="adm-sec-name">语音</div>
+                <div className="adm-sec-desc">本地 STT / TTS 端点与打断灵敏度</div>
+              </div>
+            </div>
+            <div className="adm-sec-body">
+              <Form.Item label="STT 服务地址" name="sttUrl">
+                <Input placeholder="http://localhost:8084" />
+              </Form.Item>
+              <Form.Item label="TTS 服务地址" name="ttsUrl">
+                <Input placeholder="http://localhost:8086" />
+              </Form.Item>
+              <div className="adm-grid2">
+                <Form.Item label="语速" name="voiceSpeed">
+                  <InputNumber min={0.5} max={2.0} step={0.1} style={{ width: '100%' }} />
+                </Form.Item>
+                <Form.Item
+                  label="打断阈值"
+                  name="interruptThreshold"
+                  tooltip="播放语音时判定你插话的音量阈值（默认 30）。嘈杂环境调高，总被误打断就调低。"
+                >
+                  <InputNumber min={5} max={100} step={5} style={{ width: '100%' }} addonAfter="/100" />
+                </Form.Item>
+              </div>
+              <Form.Item label="识别模型" name="sttModel" extra="保存后语音识别子进程会自动重启生效">
+                <Select
+                  options={(sttInfo?.models || []).map((m) => ({
+                    value: m.id,
+                    disabled: !m.installed,
+                    label: `${m.id}${m.installed ? '' : ' · 未下载'}`,
+                  }))}
+                />
+              </Form.Item>
+              {sttInfo && !sttInfo.models.some((m) => m.installed) && (
+                <div className="adm-callout warn" style={{ marginBottom: 12 }}>
+                  {sttInfo.modelsDir} 下没有模型，可执行 scripts/fetch-whisper-model.sh base 下载
+                </div>
+              )}
+            </div>
+          </section>
+
+          {/* ===== 外观 ===== */}
+          <section className="adm-sec">
+            <div className="adm-sec-h">
+              <div>
+                <div className="adm-sec-name">外观</div>
+                <div className="adm-sec-desc">名字与强调色；立绘与场景看板娘右键菜单</div>
+              </div>
+            </div>
+            <div className="adm-sec-body">
+              <Form.Item label="萌宠名称" name="petName" extra="留空则跟随当前角色（茉白 / 夜汐 / 星璃 …）">
+                <Input placeholder="给起个专属称呼" />
+              </Form.Item>
+              <Form.Item label="主题色" name="themeColor">
+                <Select
+                  options={THEME_COLORS.map((c) => ({
+                    label: (
+                      <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span
+                          style={{
+                            width: 12,
+                            height: 12,
+                            borderRadius: '50%',
+                            background: c.value,
+                            flex: '0 0 auto',
+                          }}
+                        />
+                        {c.label}
+                      </span>
+                    ),
+                    value: c.value,
+                  }))}
+                />
+              </Form.Item>
+            </div>
+          </section>
+
+          {/* ===== 快捷键 ===== */}
+          <section className="adm-sec">
+            <div className="adm-sec-h">
+              <div>
+                <div className="adm-sec-name">全局快捷键</div>
+                <div className="adm-sec-desc">形如 CommandOrControl+Shift+Z，保存配置时一并重新注册</div>
+              </div>
+            </div>
+            <div className="adm-sec-body">
+              {shortcutRows.length === 0 ? (
+                <div className="pnl-hint" style={{ marginBottom: 12 }}>
+                  尚未读到快捷键清单
+                </div>
+              ) : (
+                shortcutRows.map((row) => (
+                  <div className="adm-keyrow" key={row.key}>
+                    <span className="adm-keyrow-label">{row.label}</span>
+                    <Input
+                      size="small"
+                      style={{ fontSize: 11 }}
+                      value={row.accelerator}
+                      onChange={(e) =>
+                        setShortcutRows((prev) =>
+                          prev.map((r) => (r.key === row.key ? { ...r, accelerator: e.target.value } : r))
+                        )
+                      }
+                    />
+                    <span className={`adm-keyrow-state ${row.registered ? 'on' : ''}`}>
+                      {row.registered ? '已注册' : '未注册'}
+                    </span>
+                  </div>
+                ))
+              )}
+              <Button size="small" onClick={applyShortcuts} style={{ marginBottom: 12 }}>
+                应用快捷键
+              </Button>
+            </div>
+          </section>
+
+          {/* ===== 更新 ===== */}
+          <section className="adm-sec">
+            <div className="adm-sec-h">
+              <div>
+                <div className="adm-sec-name">更新</div>
+                <div className="adm-sec-desc">检查并安装新版本</div>
+              </div>
+            </div>
+            <div className="adm-sec-body">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+                <Button size="small" loading={checkingUpdate} onClick={handleCheckUpdate}>
+                  检查更新
+                </Button>
+                {updateAvailable && (
+                  <Button size="small" type="primary" onClick={handleInstallUpdate} loading={installing}>
+                    下载并安装
+                  </Button>
+                )}
+                <span className="pnl-hint">{updateText}</span>
+              </div>
+            </div>
+          </section>
+
+          {/* 兼容旧配置：字段保留但不展示，否则保存时会被清空 */}
+          <Form.Item name="ollamaUrl" hidden>
+            <Input />
+          </Form.Item>
+          <Form.Item name="modelName" hidden>
+            <Input />
+          </Form.Item>
+        </Form>
+      </div>
+
+      <div className="adm-side-foot">
+        <Button icon={<ReloadOutlined />} onClick={handleReset} disabled={loading}>
+          重置
+        </Button>
+        <div style={{ flex: 1 }} />
+        <Button onClick={onClose}>取消</Button>
+        <Button
+          type="primary"
+          icon={<SaveOutlined />}
+          onClick={handleSave}
+          loading={saving}
+          disabled={loading}
         >
-          <TextArea rows={4} placeholder="输入系统提示词，定义 AI 的角色和行为..." />
-        </Form.Item>
-
-        {/* ===== 兼容旧配置 ===== */}
-        <Form.Item name="ollamaUrl" hidden>
-          <Input />
-        </Form.Item>
-        <Form.Item name="modelName" hidden>
-          <Input />
-        </Form.Item>
-
-        {/* ===== 语音设置 ===== */}
-        <Divider titlePlacement="left" plain>
-          🎙️ 语音设置
-        </Divider>
-        <Form.Item label="STT 服务地址" name="sttUrl">
-          <Input placeholder="http://localhost:8084" />
-        </Form.Item>
-        <Form.Item label="TTS 服务地址" name="ttsUrl">
-          <Input placeholder="http://localhost:8086" />
-        </Form.Item>
-        <Form.Item label="语音速度" name="voiceSpeed">
-          <InputNumber min={0.5} max={2.0} step={0.1} style={{ width: '100%' }} />
-        </Form.Item>
-
-        {/* ===== 外观设置 ===== */}
-        <Divider titlePlacement="left" plain>
-          🎨 外观设置
-        </Divider>
-        <Form.Item label="萌宠名称" name="petName">
-          <Input placeholder="Z-Bot 小猫咪" />
-        </Form.Item>
-        <Form.Item label="主题色" name="themeColor">
-          <Select
-            options={THEME_COLORS.map((c) => ({
-              label: (
-                <span>
-                  <span
-                    style={{
-                      display: 'inline-block',
-                      width: 14,
-                      height: 14,
-                      borderRadius: '50%',
-                      background: c.value,
-                      marginRight: 8,
-                      verticalAlign: 'middle',
-                      border: '1px solid #d9d9d9',
-                    }}
-                  />
-                  {c.label}
-                </span>
-              ),
-              value: c.value,
-            }))}
-          />
-        </Form.Item>
-
-        <Divider titlePlacement="left" plain>语音与快捷键</Divider>
-        <Form.Item
-          label="语音打断阈值"
-          name="interruptThreshold"
-          tooltip="播放语音时检测你是否插话的音量阈值（默认 30）。嘈杂环境调高，总是被误打断就调低。"
-        >
-          <InputNumber min={5} max={100} step={5} style={{ width: 180 }} addonAfter="/ 100" />
-        </Form.Item>
-
-        <Form.Item
-          label="STT 本地模型"
-          name="sttModel"
-          tooltip="whisper.cpp 的 GGML 模型；保存后语音识别子进程会自动重启生效"
-        >
-          <Select
-            options={(sttInfo?.models || []).map((m) => ({
-              value: m.id,
-              disabled: !m.installed,
-              label: (
-                <Space>
-                  <span>{'ggml-' + m.id + '.bin'}</span>
-                  <Tag color={m.installed ? 'green' : 'default'}>{m.installed ? '已下载' : '未下载'}</Tag>
-                </Space>
-              ),
-            }))}
-          />
-        </Form.Item>
-        {sttInfo && !sttInfo.models.some((m) => m.installed) && (
-          <Text type="warning" style={{ fontSize: 12 }}>
-            {sttInfo.modelsDir} 下没有模型，可执行 scripts/fetch-whisper-model.sh base 下载
-          </Text>
-        )}
-
-        <Divider titlePlacement="left" plain>更新</Divider>
-        <Space>
-          <Button size="small" loading={checkingUpdate} onClick={handleCheckUpdate}>
-            检查更新
-          </Button>
-          {updateAvailable && (
-            <Button size="small" type="primary" onClick={handleInstallUpdate} loading={installing}>
-              下载并安装
-            </Button>
-          )}
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            {updateText}
-          </Text>
-        </Space>
-
-        <Card
-          size="small"
-          title="全局快捷键"
-          style={{ marginTop: 12 }}
-          extra={
-            <Button size="small" onClick={applyShortcuts}>
-              应用快捷键
-            </Button>
-          }
-        >
-          {shortcutRows.map((row) => (
-            <Space key={row.key} style={{ display: 'flex', marginBottom: 6 }}>
-              <Text style={{ width: 120, display: 'inline-block' }}>{row.label}</Text>
-              <Input
-                size="small"
-                style={{ width: 210 }}
-                value={row.accelerator}
-                onChange={(e) =>
-                  setShortcutRows((prev) =>
-                    prev.map((r) => (r.key === row.key ? { ...r, accelerator: e.target.value } : r))
-                  )
-                }
-              />
-              <Tag color={row.registered ? 'blue' : 'red'}>{row.registered ? '已注册' : '未注册'}</Tag>
-            </Space>
-          ))}
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            格式如 CommandOrControl+Shift+Z；点击保存配置时也会按其中的 shortcuts 字段重新注册。
-          </Text>
-        </Card>
-      </Form>
-    </Drawer>
+          保存
+        </Button>
+      </div>
+    </aside>
   );
 };
 

@@ -1,8 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Row, Col, Badge, Typography, Progress, Tag, Space } from 'antd';
+import { Card, Row, Col, Progress } from 'antd';
 import { TrophyOutlined, CheckCircleOutlined } from '@ant-design/icons';
-
-const { Title, Text } = Typography;
 
 interface Achievement {
   id: string;
@@ -65,53 +63,45 @@ const AchievementPanel: React.FC<AchievementPanelProps> = ({ open }) => {
   };
 
   return (
-    <Card title={
-      <Space>
+    <div>
+      <div className="pnl-toolbar">
         <TrophyOutlined style={{ color: '#f1c40f' }} />
-        <span>成就系统</span>
-        <Badge count={unlockProgress.percentage} overflowCount={100} color="gold" />
-      </Space>
-    } extra={<Text type="secondary">{unlockProgress.current}/{unlockProgress.total} 个成就</Text>}>
-      <Progress percent={unlockProgress.percentage} status="active" strokeColor={{ from: '#f1c40f', to: '#e67e22' }} />
-
-      <div style={{ marginTop: 20 }}>
-        <Title level={5}>成就列表</Title>
-        <Row gutter={16}>
-          {ACHIEVEMENTS.sort((a, b) => a.order - b.order).map((achievement) => (
-            <Col span={8} key={achievement.id}>
-              <Card
-                size="small"
-                hoverable
-                style={{ opacity: achievement.unlocked ? 1 : 0.6 }}
-                title={
-                  <Space>
-                    <span style={{ fontSize: 20 }}>{achievement.icon}</span>
-                    <span>{achievement.title}</span>
-                    {achievement.unlocked && <CheckCircleOutlined style={{ color: '#52c41a' }} />}
-                  </Space>
-                }
-              >
-                <Text type="secondary" style={{ fontSize: 12 }}>{achievement.description}</Text>
-                {achievement.unlocked ? (
-                  <Tag color="gold" style={{ marginTop: 8 }}>
-                    解锁！🎉
-                  </Tag>
-                ) : (
-                  <Tag color="default" style={{ marginTop: 8 }}>
-                    未解锁
-                  </Tag>
-                )}
-                {achievement.unlocked && (
-                  <div style={{ marginTop: 8, fontSize: 11, color: '#e67e22' }}>
-                    奖励: +{achievement.reward.affection}好感 +{achievement.reward.happiness}快乐
-                  </div>
-                )}
-              </Card>
-            </Col>
-          ))}
-        </Row>
+        <span className="pnl-hint">
+          已解锁 {unlockProgress.current} / {unlockProgress.total}
+        </span>
       </div>
-    </Card>
+      <Progress percent={unlockProgress.percentage} strokeColor={{ from: '#f1c40f', to: '#e67e22' }} />
+
+      <Row gutter={[12, 12]} style={{ marginTop: 16 }}>
+        {[...ACHIEVEMENTS].sort((a, b) => a.order - b.order).map((achievement) => (
+          <Col xs={24} sm={12} md={8} key={achievement.id}>
+            <Card
+              size="small"
+              style={{ opacity: achievement.unlocked ? 1 : 0.62, height: '100%' }}
+              styles={{ body: { padding: '10px 12px' } }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: 16, lineHeight: 1 }}>{achievement.icon}</span>
+                <span style={{ flex: 1, minWidth: 0, fontSize: 12.5, fontWeight: 600 }}>{achievement.title}</span>
+                {achievement.unlocked ? (
+                  <CheckCircleOutlined style={{ color: '#52c41a' }} />
+                ) : (
+                  <span style={{ fontSize: 10, color: 'var(--text-3)' }}>未解锁</span>
+                )}
+              </div>
+              <div style={{ marginTop: 5, fontSize: 11.5, lineHeight: 1.5, color: 'var(--text-3)' }}>
+                {achievement.description}
+              </div>
+              {achievement.unlocked && (
+                <div style={{ marginTop: 5, fontSize: 10.5, color: '#e2a03f' }}>
+                  +{achievement.reward.affection} 好感 · +{achievement.reward.happiness} 快乐
+                </div>
+              )}
+            </Card>
+          </Col>
+        ))}
+      </Row>
+    </div>
   );
 };
 

@@ -3,7 +3,18 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Z-Bot 管理端</title>
+    <title>zBiz 管理端</title>
+    <style>
+      /* 首帧即深色 + 深色滚动条：否则 WebView 会先刷一帧白底，开窗时闪一下 */
+      html,
+      body,
+      #root {
+        height: 100%;
+        margin: 0;
+        background: #0a0c11;
+        color-scheme: dark;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

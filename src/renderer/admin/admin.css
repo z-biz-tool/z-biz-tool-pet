@@ -1,0 +1,657 @@
+/* ============================================================================
+ * 管理端样式 —— 一套令牌 + 三个区域（顶栏 / 聊天列 / 侧栏）
+ *
+ * 为什么单独建这个文件：此前全部样式是 TSX 内联对象，导致三处实际问题——
+ *   1) 顶栏用 antd Header，它的 line-height:64px 会被内部两行文本继承，
+ *      内容实际高 82px，居中后顶部溢出被窗口裁掉半截（截图里「Z-Bot 小猫」只剩一半）；
+ *   2) 设置面板是 Drawer 浮层，直接盖住聊天列，文案断在抽屉边缘；
+ *   3) 分区标题用 Divider 渲染，与下方表单标签不在同一条左边线上。
+ * 布局改成「聊天列让位 + 侧栏推入」后，这些问题在结构上不再可能出现。
+ * ========================================================================== */
+
+/* 令牌挂在 :root 上，而不是 .adm-root —— antd 的 Modal 用 portal 挂到 body，
+   DOM 上不在 .adm-root 里，挂在 .adm-root 的自定义属性在弹窗内会解析成空值
+   （表现为：弹窗里的说明文字不变暗、分区细线不画、强调色全部失效）。 */
+:root {
+  --accent: #4ecdc4;
+
+  /* 中性石墨色阶：旧配色 #1a1a2e / #16213e 是蓝紫，antd 暗色算法从它们派生的
+     浮层全是紫的，一屏紫色叠紫色就显脏。改成中性底后，强调色只在需要的地方出现。 */
+  --bg: #0a0c11;
+  --bg-bar: #0d1015;
+  --bg-panel: #0f131a;
+  --bg-card: #131822;
+  --bg-inset: #0b0e13;
+
+  --line: rgba(255, 255, 255, 0.07);
+  --line-2: rgba(255, 255, 255, 0.13);
+
+  --text: #e9ecf4;
+  --text-2: rgba(233, 236, 244, 0.6);
+  --text-3: rgba(233, 236, 244, 0.34);
+
+  /* 侧栏宽度：窄窗口下按比例收，永远不把聊天列挤到不可用 */
+  --side-w: min(468px, 56vw);
+}
+
+.adm-root {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+.adm-root ::-webkit-scrollbar { width: 10px; height: 10px; }
+.adm-root ::-webkit-scrollbar-track { background: transparent; }
+.adm-root ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.1);
+  border: 3px solid transparent;
+  background-clip: padding-box;
+  border-radius: 999px;
+}
+.adm-root ::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.18); background-clip: padding-box; border: 3px solid transparent; }
+
+/* ============================== 顶栏 ============================== */
+.adm-bar {
+  flex: 0 0 auto;
+  height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 12px 0 18px;
+  background: var(--bg-bar);
+  border-bottom: 1px solid var(--line);
+  /* 显式行高：避免任何父级行高被内部多行文本继承后撑破 52px */
+  line-height: 1.25;
+}
+
+.adm-brand { display: flex; align-items: baseline; gap: 7px; flex: 0 0 auto; }
+.adm-brand-mark { font-size: 15px; font-weight: 700; letter-spacing: 0.2px; }
+.adm-brand-mark em { font-style: normal; color: var(--accent); }
+.adm-brand-sub {
+  font-size: 10.5px;
+  letter-spacing: 1.2px;
+  color: var(--text-3);
+  text-transform: uppercase;
+}
+
+.adm-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 26px;
+  padding: 0 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 11.5px;
+  color: var(--text-2);
+  white-space: nowrap;
+  min-width: 0;
+}
+.adm-pill-meta { overflow: hidden; text-overflow: ellipsis; max-width: 210px; }
+.adm-pill-sep { width: 1px; height: 11px; background: var(--line-2); flex: 0 0 auto; }
+.adm-pill.is-live {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 34%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.adm-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #767f94;
+  flex: 0 0 auto;
+}
+.adm-dot.on { background: #38d39f; box-shadow: 0 0 0 3px rgba(56, 211, 159, 0.16); }
+
+.adm-bar-actions { display: flex; align-items: center; gap: 2px; margin-left: auto; flex: 0 0 auto; }
+.adm-bar-sep { width: 1px; height: 18px; background: var(--line); margin: 0 8px; }
+
+.adm-iconbtn {
+  width: 30px;
+  height: 30px;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.adm-iconbtn:hover:not(:disabled) { background: rgba(255, 255, 255, 0.07); color: var(--text); }
+.adm-iconbtn:disabled { opacity: 0.35; cursor: not-allowed; }
+.adm-iconbtn.is-active {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 15%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 32%, transparent);
+}
+.adm-iconbtn.is-live { color: #ff6b81; animation: admPulse 1.4s ease-in-out infinite; }
+
+/* ============================== 主体 ============================== */
+.adm-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.adm-main {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  transition: padding-right 0.26s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+/* 侧栏打开时聊天列让位，而不是被盖住 —— 这是整张截图「乱」的根因 */
+.adm-body.has-side .adm-main { padding-right: var(--side-w); }
+
+.adm-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.adm-col { max-width: 780px; margin: 0 auto; padding: 0 28px; }
+
+/* 加载 / 出错 / 空态：在可用区域内垂直居中 */
+.adm-state {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 40px 28px;
+  color: var(--text-2);
+  font-size: 13px;
+  text-align: center;
+}
+
+/* 空态：不要大号 emoji 头像，改成一句标题 + 四个可点建议 */
+.adm-hero {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 44px 28px 36px;
+  text-align: center;
+}
+.adm-hero-face {
+  width: 64px;
+  height: 64px;
+  margin-bottom: 18px;
+  border-radius: 18px;
+  object-fit: cover;
+  background: var(--bg-card);
+  border: 1px solid var(--line-2);
+  box-shadow: 0 12px 30px -14px rgba(0, 0, 0, 0.9), 0 0 0 5px rgba(255, 255, 255, 0.022);
+}
+.adm-hero-eyebrow {
+  font-size: 11px;
+  letter-spacing: 0.6px;
+  color: var(--text-3);
+}
+.adm-hero-title {
+  margin: 10px 0 0;
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.5px;
+  line-height: 1.35;
+}
+.adm-hero-sub { margin: 8px 0 0; color: var(--text-2); font-size: 13px; }
+
+.adm-sug {
+  width: 100%;
+  max-width: 640px;
+  margin-top: 30px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+/* 窄窗口下侧栏会吃掉一半宽度，两列建议卡里每张只剩 ~170px，中文必然折成两行 */
+@media (max-width: 900px) { .adm-sug { grid-template-columns: 1fr; } }
+@media (max-width: 720px) { .adm-sug { grid-template-columns: 1fr; } }
+
+.adm-sug-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 11px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.022);
+  color: var(--text-2);
+  font-size: 12.8px;
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.16s, border-color 0.16s, color 0.16s, transform 0.16s;
+}
+.adm-sug-item:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--line-2);
+  color: var(--text);
+  transform: translateY(-1px);
+}
+.adm-sug-text { flex: 1 1 auto; min-width: 0; }
+.adm-sug-arrow { flex: 0 0 auto; font-size: 11px; opacity: 0; transform: translateX(-4px); transition: 0.16s; }
+.adm-sug-item:hover .adm-sug-arrow { opacity: 0.7; transform: none; }
+
+/* ============================ 对话流 ============================ */
+.adm-msgs { display: flex; flex-direction: column; gap: 20px; padding-top: 22px; padding-bottom: 26px; }
+
+/* 每条消息是一个纵向 flex：气泡在上、时间与钉住在下。
+   用 column 而不是 row + wrapper，是因为 .adm-bubble 的 max-width:78%
+   需要相对「整列宽度」计算，套一层内容宽的 wrapper 会算成自身宽度。 */
+.adm-row { display: flex; flex-direction: column; align-items: flex-start; }
+.adm-row.me { align-items: flex-end; }
+
+.adm-bubble {
+  max-width: 78%;
+  padding: 11px 15px;
+  border-radius: 14px;
+  font-size: 13.4px;
+  line-height: 1.7;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+.adm-row.me .adm-bubble {
+  background: color-mix(in srgb, var(--accent) 19%, #0e121a);
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, transparent);
+  border-bottom-right-radius: 5px;
+}
+.adm-row.ai .adm-bubble {
+  max-width: 100%;
+  background: var(--bg-card);
+  border: 1px solid var(--line);
+  border-bottom-left-radius: 5px;
+}
+
+.adm-meta {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 6px;
+  font-size: 10.5px;
+  color: var(--text-3);
+  opacity: 0;
+  transition: opacity 0.16s;
+}
+.adm-row:hover .adm-meta { opacity: 1; }
+.adm-meta-btn { cursor: pointer; color: var(--text-3); transition: color 0.15s; }
+.adm-meta-btn:hover { color: var(--accent); }
+
+/* Markdown */
+.md-pre {
+  margin: 8px 0;
+  padding: 12px 14px;
+  border-radius: 9px;
+  background: var(--bg-inset);
+  border: 1px solid var(--line);
+  overflow-x: auto;
+  font-size: 12.5px;
+  line-height: 1.6;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: #d6dbe8;
+}
+.md-code {
+  padding: 1.5px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.07);
+  font-size: 0.94em;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* 思考中 */
+.adm-thinking { display: flex; align-items: center; gap: 9px; color: var(--text-3); font-size: 12.5px; }
+.adm-thinking-dots { display: inline-flex; gap: 4px; }
+.adm-thinking-dots i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.35;
+  animation: admBlink 1.2s ease-in-out infinite;
+}
+.adm-thinking-dots i:nth-child(2) { animation-delay: 0.18s; }
+.adm-thinking-dots i:nth-child(3) { animation-delay: 0.36s; }
+
+/* ============================ 输入区 ============================ */
+.adm-composer {
+  flex: 0 0 auto;
+  padding: 12px 28px 14px;
+  background: var(--bg-bar);
+  border-top: 1px solid var(--line);
+}
+.adm-composer-in { max-width: 780px; margin: 0 auto; }
+
+.adm-input {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 7px 7px 7px 8px;
+  border-radius: 14px;
+  background: var(--bg-inset);
+  border: 1px solid var(--line);
+  transition: border-color 0.16s, box-shadow 0.16s;
+}
+.adm-input:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 52%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 11%, transparent);
+}
+.adm-input .ant-input {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 6px 5px !important;
+  font-size: 13.4px !important;
+  line-height: 1.6 !important;
+  resize: none;
+  color: var(--text);
+}
+.adm-input .ant-input::placeholder { color: var(--text-3); }
+
+.adm-tools { display: flex; gap: 1px; padding-bottom: 3px; flex: 0 0 auto; }
+.adm-send {
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #07110f;
+  font-size: 14px;
+  cursor: pointer;
+  transition: filter 0.15s, opacity 0.15s;
+}
+.adm-send:hover:not(:disabled) { filter: brightness(1.12); }
+.adm-send:disabled { background: rgba(255, 255, 255, 0.08); color: var(--text-3); cursor: not-allowed; }
+
+.adm-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+.adm-hint kbd {
+  font-family: inherit;
+  padding: 0.5px 4px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--line);
+  font-size: 9.5px;
+}
+
+/* 拖放提示 */
+.adm-drop {
+  position: absolute;
+  inset: 10px;
+  z-index: 12;
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  border: 1.5px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--accent) 9%, rgba(10, 12, 17, 0.82));
+  color: var(--accent);
+  font-size: 13.5px;
+  pointer-events: none;
+  backdrop-filter: blur(2px);
+}
+
+/* ============================== 侧栏 ============================== */
+.adm-side {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: var(--side-w);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-panel);
+  border-left: 1px solid var(--line);
+  box-shadow: -28px 0 56px -30px rgba(0, 0, 0, 0.85);
+  transform: translateX(101%);
+  transition: transform 0.26s cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+.adm-side.is-open { transform: none; }
+
+.adm-side-head {
+  flex: 0 0 auto;
+  height: 50px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px 0 18px;
+  border-bottom: 1px solid var(--line);
+}
+.adm-side-head-ico { color: var(--accent); font-size: 13px; display: flex; }
+.adm-side-title { font-size: 13px; font-weight: 600; letter-spacing: 0.2px; }
+.adm-dirty {
+  font-size: 10px;
+  color: #ffc46b;
+  border: 1px solid rgba(255, 196, 107, 0.32);
+  background: rgba(255, 196, 107, 0.1);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+.adm-side-head .adm-iconbtn { margin-left: auto; }
+
+.adm-side-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 16px 16px 22px; }
+
+.adm-side-foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 16px;
+  border-top: 1px solid var(--line);
+  background: var(--bg-panel);
+}
+
+/* ============================ 分区卡片 ============================ */
+.adm-sec {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg-card);
+  padding: 13px 13px 3px;
+  margin-bottom: 10px;
+}
+/* 分区头与字段共用同一条左对齐线：不放图标方框，否则标题会比标签右移 33px */
+.adm-sec-h { margin-bottom: 11px; }
+.adm-sec-name { font-size: 12.5px; font-weight: 600; line-height: 1.4; letter-spacing: 0.2px; }
+.adm-sec-desc { font-size: 10.5px; color: var(--text-3); line-height: 1.5; margin-top: 3px; }
+.adm-sec-body > .ant-form-item:last-child { margin-bottom: 10px; }
+
+/* 侧栏里的表单：标签小一号、间距收紧，避免 468px 宽还显得空荡 */
+.adm-side .ant-form-item { margin-bottom: 13px; }
+.adm-side .ant-form-item-label { padding-bottom: 4px !important; }
+.adm-side .ant-form-item-label > label {
+  font-size: 11.5px !important;
+  color: var(--text-2) !important;
+  height: auto !important;
+}
+.adm-side .ant-form-item-extra { font-size: 10.5px; color: var(--text-3); margin-top: 4px; }
+
+.adm-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 10px; }
+
+.adm-tagrow { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+
+.adm-callout {
+  margin-bottom: 12px;
+  padding: 9px 11px;
+  border-radius: 9px;
+  font-size: 11.5px;
+  line-height: 1.55;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-2);
+}
+.adm-callout.ok {
+  border-color: rgba(56, 211, 159, 0.3);
+  background: rgba(56, 211, 159, 0.09);
+  color: #6ee7bb;
+}
+.adm-callout.err {
+  border-color: rgba(255, 107, 129, 0.3);
+  background: rgba(255, 107, 129, 0.09);
+  color: #ff9aa8;
+}
+.adm-callout.warn {
+  border-color: rgba(255, 196, 107, 0.3);
+  background: rgba(255, 196, 107, 0.08);
+  color: #ffcf8a;
+}
+
+/* 快捷键表 */
+.adm-keyrow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 174px 56px;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.adm-keyrow-label { font-size: 11.5px; color: var(--text-2); }
+.adm-keyrow-state { font-size: 10px; text-align: center; border-radius: 999px; padding: 2px 0; border: 1px solid var(--line); color: var(--text-3); }
+.adm-keyrow-state.on { color: #6ee7bb; border-color: rgba(56, 211, 159, 0.32); background: rgba(56, 211, 159, 0.1); }
+
+/* ======================= 会议转录（侧栏专用） ======================= */
+.meet-log {
+  max-height: 46vh;
+  overflow-y: auto;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--bg-inset);
+  border: 1px solid var(--line);
+}
+.meet-seg { display: flex; gap: 9px; margin-bottom: 8px; font-size: 12px; line-height: 1.6; color: var(--text-2); }
+.meet-seg:last-child { margin-bottom: 0; }
+.meet-seg time {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  padding-top: 2px;
+  color: var(--accent);
+  opacity: 0.85;
+  font-variant-numeric: tabular-nums;
+}
+.meet-text {
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.028);
+  border: 1px solid var(--line);
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--text-2);
+  white-space: pre-wrap;
+}
+
+/* ======================= 弹窗内面板（去双重边框） ======================= */
+.pnl-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.pnl-hint { font-size: 11.5px; color: var(--text-3); line-height: 1.5; }
+.pnl-toolbar .pnl-actions { margin-left: auto; display: flex; gap: 8px; }
+
+.pnl-sec { margin-bottom: 18px; }
+.pnl-sec:last-child { margin-bottom: 0; }
+.pnl-sec-h {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.pnl-sec-h::after { content: ''; flex: 1 1 auto; height: 1px; background: var(--line); }
+
+/* 场景卡：渐变色放成顶部色条，而不是整卡背景 ——
+   整卡铺渐变会让四个场景的文字对比度各不相同，深色文字压在浅色渐变上直接糊掉 */
+.pnl-scene {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 0 0 10px;
+  overflow: hidden;
+  text-align: left;
+  border-radius: 11px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.022);
+  color: var(--text-2);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.16s, background 0.16s, transform 0.16s;
+}
+.pnl-scene:hover { background: rgba(255, 255, 255, 0.05); border-color: var(--line-2); transform: translateY(-1px); }
+.pnl-scene.on {
+  border-color: color-mix(in srgb, var(--accent) 62%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text);
+}
+.pnl-scene-swatch { display: block; height: 46px; }
+.pnl-scene-name { padding: 0 11px; font-size: 12.5px; font-weight: 600; color: var(--text); }
+.pnl-scene-desc { padding: 0 11px; font-size: 10.5px; color: var(--text-3); line-height: 1.45; }
+
+/* 粒子开关：六个大色块太吵，改成低饱和选中态 */
+.pnl-particle {
+  width: 100%;
+  height: 74px;
+  font-size: 22px;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.022);
+  border: 1px solid var(--line);
+  color: var(--text-3);
+  cursor: pointer;
+  transition: border-color 0.16s, background 0.16s, filter 0.16s;
+}
+.pnl-particle:hover { background: rgba(255, 255, 255, 0.055); }
+.pnl-particle.on {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 42%, transparent);
+  color: var(--text);
+}
+.pnl-particle:not(.on) { filter: grayscale(0.55) opacity(0.62); }
+.pnl-particle-label { margin-top: 6px; text-align: center; font-size: 10.5px; color: var(--text-3); }
+
+/* 弹窗关闭按钮：antd 打开时会把焦点放到它身上，默认外轮廓是 3px 强调色方块，
+   在深色弹窗里像被选中。改成中性细描边。
+   （Modal 挂在 body 上，所以这几条不能加 .adm-root 前缀） */
+.ant-modal-close { border-radius: 8px; }
+.ant-modal-close:focus,
+.ant-modal-close:focus-visible {
+  outline: 1px solid rgba(255, 255, 255, 0.16) !important;
+  outline-offset: 2px;
+}
+
+/* ============================== 动画 ============================== */
+@keyframes admPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+@keyframes admBlink {
+  0%, 100% { opacity: 0.22; transform: translateY(0); }
+  50% { opacity: 1; transform: translateY(-2px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .adm-root *, .adm-root *::before, .adm-root *::after {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}

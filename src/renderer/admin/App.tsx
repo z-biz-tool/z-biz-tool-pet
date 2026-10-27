@@ -1,23 +1,17 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  Layout,
   Input,
   Button,
-  Avatar,
   Tooltip,
-  Tag,
-  Card,
   Spin,
   message,
   theme as antdTheme,
   ConfigProvider,
   Modal,
   Collapse,
-  Alert,
 } from 'antd';
 import {
   AudioOutlined,
-  AudioMutedOutlined,
   CameraOutlined,
   SendOutlined,
   SettingOutlined,
@@ -31,6 +25,10 @@ import {
   ExclamationCircleOutlined,
   StarOutlined,
   SunOutlined,
+  CloseOutlined,
+  CustomerServiceOutlined,
+  ArrowRightOutlined,
+  LoadingOutlined,
 } from '@ant-design/icons';
 import SettingsPanel from './SettingsPanel';
 import MeetingPanel from './MeetingPanel';
@@ -39,8 +37,12 @@ import AchievementPanel from './AchievementPanel';
 import SceneryPanel from './SceneryPanel';
 import { DEFAULT_CONFIG, SUGGESTED_QUESTIONS } from '../shared/prompts';
 import { errorMessage } from '../shared/interaction';
+import { characterOf } from '../pet/characters';
+import './admin.css';
 
-const { Header, Content, Footer } = Layout;
+/** 旧版猫咪名，出现即视为「用户没改过名」 */
+const LEGACY_PET_NAME = 'Z-Bot 小猫咪';
+
 const { TextArea } = Input;
 
 const log = (msg: string) => {
@@ -58,19 +60,7 @@ function renderMarkdown(text: string): React.ReactNode {
     if (part.startsWith('```')) {
       const code = part.replace(/^```\w*\n?/, '').replace(/```$/, '');
       return (
-        <pre
-          key={idx}
-          style={{
-            background: 'rgba(0,0,0,0.4)',
-            borderRadius: 8,
-            padding: '12px',
-            margin: '6px 0',
-            overflowX: 'auto',
-            fontSize: 13,
-            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-            color: '#e6e6e6',
-          }}
-        >
+        <pre key={idx} className="md-pre">
           <code>{code}</code>
         </pre>
       );
@@ -98,10 +88,7 @@ function renderInline(text: string): React.ReactNode {
     }
     if (t.startsWith('`') && t.endsWith('`')) {
       return (
-        <code
-          key={i}
-          style={{ background: 'rgba(0,0,0,0.3)', padding: '1px 4px', borderRadius: 3, fontFamily: 'ui-monospace, monospace' }}
-        >
+        <code key={i} className="md-code">
           {t.slice(1, -1)}
         </code>
       );
@@ -176,8 +163,44 @@ function App() {
   const [achievementOpen, setAchievementOpen] = useState(false);
   const [sceneryOpen, setSceneryOpen] = useState(false);
 
-  const { token: themeToken } = antdTheme.useToken();
-  const accent = config.themeColor || themeToken.colorPrimary;
+  /**
+   * 右侧栏同一时刻只放一块内容：设置优先于会议。
+   * 旧实现里会议面板是 `position:absolute; top:80; right:16` 的死浮层，
+   * 不管用不用都压在消息流右上角；现在它和设置共用同一列。
+   */
+  const [meetingOpen, setMeetingOpen] = useState(false);
+
+  // 此前用 useToken() 兜底，但它跑在 ConfigProvider 之外，拿到的是浅色默认主题的
+  // token（colorPrimary = #1677ff），配暗色界面很突兀；直接用配置里的主题色。
+  const accent = config.themeColor || DEFAULT_CONFIG.themeColor;
+  const providerLabel =
+    config.providers?.find((p) => p.id === config.aiProvider)?.name || config.aiProvider || 'ollama';
+  const activeModel = config.aiModel || config.modelName;
+
+  /**
+   * 显示名与宠物窗口同一套规则：配置里没改名、或还留着旧版猫咪名，就用当前角色的名字。
+   * 否则管理端写「Z-Bot 小猫咪」、桌面上写「茉白」，同一个她有两个名字。
+   */
+  const persona = characterOf(config.currentSkinId || '');
+  const petDisplayName =
+    !config.petName?.trim() || config.petName.trim() === LEGACY_PET_NAME
+      ? persona.name
+      : config.petName.trim();
+
+  const openSettings = () => {
+    setMeetingOpen(false);
+    setSettingsOpen(true);
+  };
+  const toggleMeeting = () => {
+    setSettingsOpen(false);
+    setMeetingOpen((v) => !v);
+  };
+
+  // antd 的 Modal 用 portal 挂到 body，DOM 上不在 .adm-root 里，读不到那里的自定义属性。
+  // 强调色额外写一份到 :root，弹窗里的 color-mix(… var(--accent) …) 才有值。
+  useEffect(() => {
+    document.documentElement.style.setProperty('--accent', accent);
+  }, [accent]);
 
   const loadHistoryFromMain = async () => {
     setHistoryLoading(true);
@@ -759,302 +782,307 @@ function App() {
   return (
     <ConfigProvider
       theme={{
-        token: { colorPrimary: accent, borderRadius: 10, colorBgBase: '#1a1a2e', colorTextBase: '#ffffff' },
         algorithm: antdTheme.darkAlgorithm,
+        token: {
+          colorPrimary: accent,
+          colorBgBase: '#0a0c11',
+          colorTextBase: '#e9ecf4',
+          colorBgContainer: '#12161d',
+          colorBgElevated: '#161b24',
+          colorBorder: 'rgba(255,255,255,0.10)',
+          colorBorderSecondary: 'rgba(255,255,255,0.06)',
+          borderRadius: 9,
+          fontSize: 13,
+          controlHeight: 34,
+          controlOutline: 'transparent',
+        },
+        components: {
+          Button: { primaryShadow: 'none', defaultShadow: 'none', fontWeight: 500 },
+          Modal: { contentBg: '#0f131a', headerBg: '#0f131a' },
+          Table: { headerBg: '#131822', rowHoverBg: 'rgba(255,255,255,0.04)' },
+        },
       }}
     >
-      <Layout style={{ height: '100vh', background: '#1a1a2e' }}>
-        {/* Header */}
-        <Header
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '0 20px',
-            background: 'linear-gradient(90deg, #16213e 0%, #1a1a2e 100%)',
-            borderBottom: '1px solid rgba(255,255,255,0.08)',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <Avatar
-              size={40}
-              style={{
-                background: `linear-gradient(135deg, ${accent}, ${accent}99)`,
-                fontSize: 22,
-              }}
-            >
-              🐱
-            </Avatar>
-            <div>
-              <div style={{ fontWeight: 600, fontSize: 16 }}>{config.petName}</div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#999' }}>
-                <span
-                  style={{
-                    width: 8,
-                    height: 8,
-                    borderRadius: '50%',
-                    background: online ? '#52c41a' : '#999',
-                    display: 'inline-block',
-                    boxShadow: online ? '0 0 6px #52c41a' : 'none',
-                  }}
-                />
-                {online ? '在线' : '离线'}
-                {isSpeaking && <Tag color="blue" style={{ marginLeft: 6, fontSize: 11 }}>播放中(可打断)</Tag>}
-              </div>
-            </div>
+      {/* --accent 注入到令牌层：CSS 里所有 color-mix(in srgb, var(--accent) …) 都跟着设置页的主题色走 */}
+      <div className="adm-root" style={{ '--accent': accent } as React.CSSProperties}>
+        {/* 顶栏不用 antd Header：它自带 line-height:64px，会被内部两行文本继承，
+            整块内容高 82px、居中后顶部溢出 9px，在窗口顶端被裁掉半截（v1.2.0 的实拍现象） */}
+        <header className="adm-bar">
+          <div className="adm-brand">
+            <span className="adm-brand-mark">
+              z<em>Biz</em>
+            </span>
+            <span className="adm-brand-sub">管理端</span>
           </div>
-          <div style={{ display: 'flex', gap: 8 }}>
+
+          <div className="adm-pill" title={`${providerLabel} · ${activeModel}`}>
+            <i className={`adm-dot ${online ? 'on' : ''}`} />
+            <span>{online ? '在线' : '离线'}</span>
+            <span className="adm-pill-sep" />
+            <span className="adm-pill-meta">
+              {providerLabel} · {activeModel}
+            </span>
+          </div>
+
+          {isSpeaking && (
+            <button type="button" className="adm-pill is-live" onClick={handleVoiceInterrupt} title="点击打断播报">
+              <SoundOutlined /> 播报中 · 可打断
+            </button>
+          )}
+
+          <div className="adm-bar-actions">
             <Tooltip title="清空对话">
-              <Button aria-label="清空对话" shape="circle" icon={<DeleteOutlined />} onClick={clearHistory} disabled={messages.length === 0} />
+              <button
+                type="button"
+                className="adm-iconbtn"
+                aria-label="清空对话"
+                onClick={clearHistory}
+                disabled={messages.length === 0}
+              >
+                <DeleteOutlined />
+              </button>
             </Tooltip>
             <Tooltip title="快捷指令">
-              <Button aria-label="快捷指令" shape="circle" icon={<ToolOutlined />} onClick={() => setQuickCommandOpen(true)} />
+              <button
+                type="button"
+                className="adm-iconbtn"
+                aria-label="快捷指令"
+                onClick={() => setQuickCommandOpen(true)}
+              >
+                <ToolOutlined />
+              </button>
             </Tooltip>
-            <Tooltip title="成就系统">
-              <Button aria-label="成就系统" shape="circle" icon={<StarOutlined />} onClick={() => setAchievementOpen(true)} />
+            <Tooltip title="成就">
+              <button
+                type="button"
+                className="adm-iconbtn"
+                aria-label="成就"
+                onClick={() => setAchievementOpen(true)}
+              >
+                <StarOutlined />
+              </button>
             </Tooltip>
-            <Tooltip title="场景特效">
-              <Button aria-label="场景特效" shape="circle" icon={<SunOutlined />} onClick={() => setSceneryOpen(true)} />
+            <Tooltip title="场景与粒子">
+              <button
+                type="button"
+                className="adm-iconbtn"
+                aria-label="场景与粒子"
+                onClick={() => setSceneryOpen(true)}
+              >
+                <SunOutlined />
+              </button>
+            </Tooltip>
+            <Tooltip title="会议实时转录">
+              <button
+                type="button"
+                className={`adm-iconbtn ${meetingOpen ? 'is-active' : ''}`}
+                aria-label="会议实时转录"
+                aria-pressed={meetingOpen}
+                onClick={toggleMeeting}
+              >
+                <CustomerServiceOutlined />
+              </button>
             </Tooltip>
             <Tooltip title="设置">
-              <Button aria-label="设置" shape="circle" icon={<SettingOutlined />} onClick={() => setSettingsOpen(true)} />
+              <button
+                type="button"
+                className={`adm-iconbtn ${settingsOpen ? 'is-active' : ''}`}
+                aria-label="设置"
+                aria-pressed={settingsOpen}
+                onClick={() => (settingsOpen ? setSettingsOpen(false) : openSettings())}
+              >
+                <SettingOutlined />
+              </button>
             </Tooltip>
-            <Tooltip title="切换到萌宠模式">
-              <Button type="primary" icon={<SwapOutlined />} onClick={toggleMode}>
-                萌宠
+            <span className="adm-bar-sep" />
+            <Tooltip title="收起管理端，回到桌面">
+              <Button type="primary" size="small" icon={<SwapOutlined />} onClick={toggleMode}>
+                回桌面
               </Button>
             </Tooltip>
           </div>
-        </Header>
+        </header>
 
-        {/* 消息列表 / 空状态 */}
-        <Content
-          style={{ overflow: 'auto', padding: 16, position: 'relative' }}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-        >
-          {/* 拖放文件提示 */}
-          {isDragOver && (
-            <div
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                right: 0,
-                bottom: 0,
-                background: 'rgba(114, 46, 209, 0.3)',
-                border: '2px dashed #722ed1',
-                borderRadius: 12,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                zIndex: 1000,
-                fontSize: 18,
-                color: '#b794f6',
-                pointerEvents: 'none',
-              }}
-            >
-              📂 拖放文件到这里
-            </div>
-          )}
+        <div className={`adm-body ${settingsOpen || meetingOpen ? 'has-side' : ''}`}>
+          <main
+            className="adm-main"
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+          >
+            {isDragOver && (
+              <div className="adm-drop">
+                <span>📂 松开即可发送文件</span>
+              </div>
+            )}
 
-          {historyLoading ? (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 12 }}>
-              <Spin size="large" />
-              <span style={{ color: '#999' }}>加载对话历史...</span>
-            </div>
-          ) : messages.length === 0 && historyError ? (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-              <Alert
-                type="error"
-                showIcon
-                message="对话历史加载失败"
-                description={historyError}
-                action={
+            <div className="adm-scroll">
+              {historyLoading ? (
+                <div className="adm-state">
+                  <Spin size="large" />
+                  <span>正在载入对话…</span>
+                </div>
+              ) : messages.length === 0 && historyError ? (
+                <div className="adm-state">
+                  <div className="adm-callout err" style={{ maxWidth: 520, textAlign: 'left' }}>
+                    <strong>对话历史加载失败</strong>
+                    <div style={{ marginTop: 4 }}>{historyError}</div>
+                  </div>
                   <Button size="small" onClick={() => void loadHistoryFromMain()}>
                     重试
                   </Button>
-                }
-              />
-            </div>
-          ) : messages.length === 0 ? (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%' }}>
-              <div
-                style={{
-                  width: 96,
-                  height: 96,
-                  borderRadius: '50%',
-                  background: `linear-gradient(135deg, ${accent}, ${accent}66)`,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  fontSize: 52,
-                  marginBottom: 20,
-                  boxShadow: `0 8px 32px ${accent}55`,
-                  animation: 'adminFloat 3s ease-in-out infinite',
-                }}
-              >
-                🐱
-              </div>
-              <h2 style={{ color: '#fff', marginBottom: 8 }}>欢迎使用 {config.petName}</h2>
-              <p style={{ color: '#888', marginBottom: 24 }}>我是你的专属桌面伴侣，随时陪伴你~</p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 420, width: '100%' }}>
-                {SUGGESTED_QUESTIONS.map((q, i) => (
-                  <Card
-                    key={i}
-                    hoverable
-                    size="small"
-                    onClick={() => sendMessage(q)}
-                    style={{
-                      background: 'rgba(255,255,255,0.05)',
-                      border: '1px solid rgba(255,255,255,0.1)',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    <span style={{ color: '#ccc' }}>{q}</span>
-                  </Card>
-                ))}
-              </div>
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              {messages.map((msg) => (
-                <div
-                  key={msg.id}
-                  style={{ display: 'flex', justifyContent: msg.role === 'user' ? 'flex-end' : 'flex-start', gap: 8 }}
-                >
-                  {msg.role === 'assistant' && (
-                    <Avatar size={32} style={{ background: accent, flexShrink: 0 }}>
-                      🐱
-                    </Avatar>
-                  )}
-                  <div style={{ maxWidth: '72%' }}>
-                    <div
-                      style={{
-                        padding: '10px 14px',
-                        borderRadius: msg.role === 'user' ? '16px 16px 4px 16px' : '16px 16px 16px 4px',
-                        background: msg.role === 'user' ? accent : 'rgba(255,255,255,0.08)',
-                        color: '#fff',
-                        lineHeight: 1.6,
-                        fontSize: 14,
-                        wordBreak: 'break-word',
-                      }}
-                    >
-                      {renderMarkdown(msg.content)}
-                      {/* 工具调用显示 */}
-                      {msg.role === 'assistant' && renderToolCalls(msg.toolCalls)}
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
-                      <span style={{ fontSize: 11, color: '#666', textAlign: msg.role === 'user' ? 'right' : 'left' }}>
-                        {new Date(msg.timestamp).toLocaleTimeString()}
-                      </span>
-                      {msg.role === 'assistant' && (
-                        <Tooltip title="钉到桌面">
-                          <PushpinOutlined
-                            role="button"
-                            tabIndex={0}
-                            aria-label="钉到桌面"
-                            style={{ fontSize: 11, color: '#666', cursor: 'pointer' }}
-                            onClick={() => void handlePin(msg)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter' || e.key === ' ') {
-                                e.preventDefault();
-                                void handlePin(msg);
-                              }
-                            }}
-                          />
-                        </Tooltip>
-                      )}
-                    </div>
-                  </div>
-                  {msg.role === 'user' && (
-                    <Avatar size={32} style={{ background: '#555', flexShrink: 0 }}>
-                      我
-                    </Avatar>
-                  )}
                 </div>
-              ))}
-              {isThinking && (
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <Avatar size={32} style={{ background: accent }}>
-                    🐱
-                  </Avatar>
-                  <div style={{ padding: '10px 14px', background: 'rgba(255,255,255,0.08)', borderRadius: '16px 16px 16px 4px' }}>
-                    <Spin size="small" /> <span style={{ color: '#999', marginLeft: 8 }}>思考中...</span>
+              ) : messages.length === 0 ? (
+                <div className="adm-hero">
+                  {/* 空态放她的头像：这是「她」的对话窗口，不是通用聊天框 */}
+                  <img className="adm-hero-face" src={persona.face} alt="" draggable={false} />
+                  <span className="adm-hero-eyebrow">zBiz · 桌面伴侣</span>
+                  <h1 className="adm-hero-title">今天想聊点什么？</h1>
+                  <p className="adm-hero-sub">{petDisplayName} 在线 · 长按桌面上的她也能直接说话</p>
+                  <div className="adm-sug">
+                    {SUGGESTED_QUESTIONS.map((q, i) => (
+                      <button key={i} type="button" className="adm-sug-item" onClick={() => sendMessage(q)}>
+                        <span className="adm-sug-text">{q}</span>
+                        <ArrowRightOutlined className="adm-sug-arrow" />
+                      </button>
+                    ))}
                   </div>
+                </div>
+              ) : (
+                <div className="adm-col adm-msgs">
+                  {messages.map((msg) => (
+                    <div key={msg.id} className={`adm-row ${msg.role === 'user' ? 'me' : 'ai'}`}>
+                      <div className="adm-bubble">
+                        {renderMarkdown(msg.content)}
+                        {msg.role === 'assistant' && renderToolCalls(msg.toolCalls)}
+                      </div>
+                      <div className="adm-meta">
+                        <span>{new Date(msg.timestamp).toLocaleTimeString()}</span>
+                        {msg.role === 'assistant' && (
+                          <Tooltip title="钉到桌面">
+                            <PushpinOutlined
+                              className="adm-meta-btn"
+                              role="button"
+                              tabIndex={0}
+                              aria-label="钉到桌面"
+                              onClick={() => void handlePin(msg)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  void handlePin(msg);
+                                }
+                              }}
+                            />
+                          </Tooltip>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+
+                  {isThinking && (
+                    <div className="adm-thinking">
+                      <span className="adm-thinking-dots">
+                        <i />
+                        <i />
+                        <i />
+                      </span>
+                      <span>正在生成回复…</span>
+                    </div>
+                  )}
+                  <div ref={messagesEndRef} />
                 </div>
               )}
-              <div ref={messagesEndRef} />
             </div>
-          )}
-        </Content>
 
-        {/* 输入区 */}
-        <Footer style={{ padding: 12, background: '#16213e', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-            <Tooltip title={isListening ? '停止录音' : '语音输入'}>
-              <Button
-                aria-label={isListening ? '停止录音' : '语音输入'}
-                shape="circle"
-                size="large"
-                danger={isListening}
-                icon={isListening ? <AudioMutedOutlined /> : <AudioOutlined />}
-                onClick={isListening ? stopListening : startListening}
-                style={isListening ? { animation: 'adminPulse 1s infinite' } : undefined}
-              />
-            </Tooltip>
-            <Tooltip title="截图分析">
-              <Button
-                aria-label="截图分析"
-                shape="circle"
-                size="large"
-                icon={<CameraOutlined />}
-                onClick={captureScreenshot}
-                loading={isCapturing}
-              />
-            </Tooltip>
-            <TextArea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onPressEnter={(e) => {
-                if (!e.shiftKey) {
-                  e.preventDefault();
-                  sendMessage(input);
-                }
-              }}
-              placeholder="和你的小猫咪说点什么吧~ (Enter 发送, Shift+Enter 换行, 支持拖放文件)"
-              autoSize={{ minRows: 1, maxRows: 4 }}
-              style={{ flex: 1, borderRadius: 20, background: 'rgba(255,255,255,0.06)', borderColor: 'rgba(255,255,255,0.1)' }}
-            />
-            <Button
-              type="primary"
-              shape="circle"
-              size="large"
-              aria-label="发送消息"
-              icon={<SendOutlined />}
-              onClick={() => sendMessage(input)}
-              disabled={!input.trim() || isThinking}
-            />
-            {isSpeaking && (
-              <Tooltip title="点击打断">
-                <SoundOutlined
-                  role="button"
-                  tabIndex={0}
-                  aria-label="打断语音播放"
-                  style={{ color: accent, fontSize: 18, animation: 'adminPulse 1s infinite', cursor: 'pointer' }}
-                  onClick={handleVoiceInterrupt}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault();
-                      handleVoiceInterrupt();
-                    }
-                  }}
-                />
-              </Tooltip>
-            )}
-          </div>
-        </Footer>
+            <div className="adm-composer">
+              <div className="adm-composer-in">
+                <div className="adm-input">
+                  <div className="adm-tools">
+                    <Tooltip title={isListening ? '停止录音' : '语音输入'}>
+                      <button
+                        type="button"
+                        className={`adm-iconbtn ${isListening ? 'is-live' : ''}`}
+                        aria-label={isListening ? '停止录音' : '语音输入'}
+                        aria-pressed={isListening}
+                        onClick={isListening ? stopListening : startListening}
+                      >
+                        <AudioOutlined />
+                      </button>
+                    </Tooltip>
+                    <Tooltip title="截图分析">
+                      <button
+                        type="button"
+                        className="adm-iconbtn"
+                        aria-label="截图分析"
+                        onClick={captureScreenshot}
+                        disabled={isCapturing}
+                      >
+                        {isCapturing ? <LoadingOutlined /> : <CameraOutlined />}
+                      </button>
+                    </Tooltip>
+                  </div>
+
+                  <TextArea
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onPressEnter={(e) => {
+                      if (!e.shiftKey) {
+                        e.preventDefault();
+                        void sendMessage(input);
+                      }
+                    }}
+                    placeholder={`和 ${petDisplayName} 说点什么…`}
+                    autoSize={{ minRows: 1, maxRows: 5 }}
+                    variant="borderless"
+                  />
+
+                  <button
+                    type="button"
+                    className="adm-send"
+                    aria-label="发送消息"
+                    onClick={() => void sendMessage(input)}
+                    disabled={!input.trim() || isThinking}
+                  >
+                    <SendOutlined />
+                  </button>
+                </div>
+
+                <div className="adm-hint">
+                  <span>
+                    <kbd>Enter</kbd> 发送 · <kbd>Shift</kbd>+<kbd>Enter</kbd> 换行 · 可拖入文件或图片
+                  </span>
+                  <span>{activeModel}</span>
+                </div>
+              </div>
+            </div>
+          </main>
+
+          <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} onSave={setConfig} />
+
+          <aside
+            className={`adm-side ${meetingOpen ? 'is-open' : ''}`}
+            aria-label="会议实时转录"
+            inert={!meetingOpen}
+          >
+            <div className="adm-side-head">
+              <span className="adm-side-head-ico">
+                <CustomerServiceOutlined />
+              </span>
+              <span className="adm-side-title">会议实时转录</span>
+              <button
+                type="button"
+                className="adm-iconbtn"
+                aria-label="关闭会议面板"
+                onClick={() => setMeetingOpen(false)}
+              >
+                <CloseOutlined />
+              </button>
+            </div>
+            <div className="adm-side-body">
+              <MeetingPanel />
+            </div>
+          </aside>
+        </div>
 
         {/* 工具确认对话框 */}
         <Modal
@@ -1065,18 +1093,21 @@ function App() {
             </span>
           }
           open={confirmModal.visible}
-          onCancel={() => { void handleToolCancel(); }}
+          onCancel={() => {
+            void handleToolCancel();
+          }}
           closable={!confirmBusy}
           maskClosable={false}
+          centered
           footer={[
-            <Button key="cancel" autoFocus disabled={confirmBusy} onClick={() => { void handleToolCancel(); }}>
+            <Button key="cancel" autoFocus disabled={confirmBusy} onClick={() => void handleToolCancel()}>
               拒绝
             </Button>,
-            <Button key="allow" type="primary" loading={confirmBusy} onClick={() => { void handleToolConfirm(false); }}>
+            <Button key="allow" type="primary" loading={confirmBusy} onClick={() => void handleToolConfirm(false)}>
               允许
             </Button>,
             confirmModal.allowAlways ? (
-              <Button key="always" type="primary" danger disabled={confirmBusy} onClick={() => { void handleToolConfirm(true); }}>
+              <Button key="always" type="primary" danger disabled={confirmBusy} onClick={() => void handleToolConfirm(true)}>
                 始终允许
               </Button>
             ) : null,
@@ -1090,52 +1121,47 @@ function App() {
           </div>
           <div>
             <strong>参数:</strong>
-            <pre
-              style={{
-                background: 'rgba(0,0,0,0.4)',
-                padding: 8,
-                borderRadius: 6,
-                fontSize: 12,
-                maxHeight: 200,
-                overflow: 'auto',
-                color: '#e6e6e6',
-              }}
-            >
+            <pre className="md-pre" style={{ maxHeight: 200, overflow: 'auto' }}>
               {JSON.stringify(confirmModal.arguments, null, 2)}
             </pre>
           </div>
         </Modal>
 
-        <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} onSave={setConfig} />
-
-        {/* 三个面板内部只有 Card，没有自己的浮层；不套 Modal 时按钮只改 state、界面无变化 */}
-        <Modal open={quickCommandOpen} onCancel={() => setQuickCommandOpen(false)} footer={null} width={900}>
+        {/* 三个面板此前都没有 Modal 标题，只有浮在角落的关闭按钮；也没有卡片外的边距约束 */}
+        <Modal
+          title="快捷指令"
+          open={quickCommandOpen}
+          onCancel={() => setQuickCommandOpen(false)}
+          footer={null}
+          centered
+          width="min(920px, 92vw)"
+          destroyOnHidden
+        >
           <QuickCommandPanel open={quickCommandOpen} onClose={() => setQuickCommandOpen(false)} />
         </Modal>
-        <Modal open={achievementOpen} onCancel={() => setAchievementOpen(false)} footer={null} width={1000}>
+        <Modal
+          title="成就"
+          open={achievementOpen}
+          onCancel={() => setAchievementOpen(false)}
+          footer={null}
+          centered
+          width="min(980px, 94vw)"
+          destroyOnHidden
+        >
           <AchievementPanel open={achievementOpen} onClose={() => setAchievementOpen(false)} />
         </Modal>
-        <Modal open={sceneryOpen} onCancel={() => setSceneryOpen(false)} footer={null} width={900}>
+        <Modal
+          title="场景与粒子"
+          open={sceneryOpen}
+          onCancel={() => setSceneryOpen(false)}
+          footer={null}
+          centered
+          width="min(900px, 92vw)"
+          destroyOnHidden
+        >
           <SceneryPanel open={sceneryOpen} onClose={() => setSceneryOpen(false)} />
         </Modal>
-
-        <div style={{ position: 'absolute', top: 80, right: 16, width: 360, zIndex: 10 }}>
-          <MeetingPanel accent={accent} />
-        </div>
-
-        <style>{`
-          /* 默认 body 有 8px 外边距，会让 100vh 布局多出 16px 并冒出滚动条 */
-          html, body, #root { height: 100%; margin: 0; }
-          @keyframes adminFloat {
-            0%, 100% { transform: translateY(0); }
-            50% { transform: translateY(-8px); }
-          }
-          @keyframes adminPulse {
-            0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(245,34,45,0.4); }
-            50% { transform: scale(1.08); box-shadow: 0 0 0 8px rgba(245,34,45,0); }
-          }
-        `}</style>
-      </Layout>
+      </div>
     </ConfigProvider>
   );
 }

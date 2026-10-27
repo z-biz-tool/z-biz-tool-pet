@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Card, Table, Button, Tag, Space, Modal, Form, Input, Switch, message } from 'antd';
+import { Table, Button, Tag, Space, Modal, Form, Input, Switch, message } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import { errorMessage, upsertById } from '../shared/interaction';
 
@@ -154,9 +154,21 @@ const QuickCommandPanel: React.FC<QuickCommandPanelProps> = ({ open }) => {
 
   return (
     <>
-      <Card title="快捷指令管理" extra={<Button type="primary" icon={<PlusOutlined />} onClick={() => setIsModalOpen(true)}>添加指令</Button>}>
-        <Table columns={columns} dataSource={commands} rowKey="id" pagination={{ pageSize: 10 }} />
-      </Card>
+      <div className="pnl-toolbar">
+        <span className="pnl-hint">命中触发词的句子会直接回预设内容，不经过模型</span>
+        <div className="pnl-actions">
+          <Button type="primary" icon={<PlusOutlined />} onClick={() => setIsModalOpen(true)}>
+            添加指令
+          </Button>
+        </div>
+      </div>
+      <Table
+        columns={columns}
+        dataSource={commands}
+        rowKey="id"
+        size="small"
+        pagination={{ pageSize: 8, hideOnSinglePage: true, showSizeChanger: false }}
+      />
 
       <Modal
         title={editingCommand ? '编辑指令' : '添加新指令'}
