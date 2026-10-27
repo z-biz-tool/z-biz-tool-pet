@@ -1,5 +1,6 @@
 //! 皮肤系统：Electron src/main/ipc-handlers.ts:56-97 的三条端点。
-//! 预设色板是硬编码在 handler 里的，渲染层按 id 回查 —— 一个 hex 抄错就是一张变色的猫。
+//! 预设色板与渲染层 `pet/characters/index.ts` 是同一份清单：渲染层按 id 回查立绘，
+//! 一个 hex 或 id 抄错，就是「换了配色头像还是上一个人」的鬼故事。
 
 use serde_json::{json, Value};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -30,68 +31,62 @@ type Preset = (
 );
 
 const PRESETS: &[Preset] = &[
+    // 2026-10-27：皮肤语义从「圆猫换色」变成「6 个立绘角色各一套配色」。
+    // 这份表和 src/renderer/pet/characters/index.ts 是同一个清单的两种语言版本，
+    // id / 名称 / 六个颜色必须逐字一致（渲染层认 id 回查立绘，抄错就是张冠李戴）。
     (
-        "default-purple",
-        "默认紫",
-        "#722ed1",
-        "#b794f6",
-        "#531dab",
-        "rgba(255, 105, 180, 0.5)",
-        "#722ed1",
+        "chatgpt",
+        "茉白",
+        "#3fb6a8",
+        "#a7f0e2",
+        "#0e6157",
+        "rgba(255, 150, 190, 0.45)",
+        "#4ecdc4",
     ),
     (
-        "forest-green",
-        "森林绿",
-        "#237804",
-        "#52c41a",
-        "#135200",
-        "rgba(250, 173, 20, 0.4)",
-        "#52c41a",
+        "claude",
+        "夜汐",
+        "#6f7bd6",
+        "#b7c0ff",
+        "#2b2f6b",
+        "rgba(190, 160, 255, 0.4)",
+        "#8f9cff",
     ),
     (
-        "ocean-blue",
-        "海洋蓝",
-        "#003a8c",
-        "#1890ff",
-        "#002766",
-        "rgba(255, 105, 180, 0.4)",
-        "#1890ff",
+        "gemini",
+        "星璃",
+        "#8b7cf6",
+        "#cfc2ff",
+        "#4a2f9e",
+        "rgba(190, 178, 255, 0.5)",
+        "#a78bfa",
     ),
     (
-        "sakura-pink",
-        "樱花粉",
-        "#9e1068",
-        "#eb2f96",
-        "#6e0f4e",
-        "rgba(255, 182, 193, 0.6)",
-        "#eb2f96",
+        "deepseek",
+        "砚秋",
+        "#d98243",
+        "#ffc79a",
+        "#8a4718",
+        "rgba(255, 176, 140, 0.45)",
+        "#f0a35e",
     ),
     (
-        "lava-red",
-        "岩浆红",
-        "#820014",
-        "#ff4d4f",
-        "#5c0011",
-        "rgba(255, 182, 193, 0.5)",
-        "#ff4d4f",
+        "midjourney",
+        "棠青",
+        "#4f9ec4",
+        "#a9e0f2",
+        "#1f5a76",
+        "rgba(255, 178, 178, 0.4)",
+        "#63b3d6",
     ),
     (
-        "galaxy-gray",
-        "银河灰",
-        "#434343",
-        "#bfbfbf",
-        "#1f1f1f",
-        "rgba(114, 46, 209, 0.4)",
-        "#bfbfbf",
-    ),
-    (
-        "golden",
-        "金色",
-        "#ad6800",
-        "#faad14",
-        "#874d00",
-        "rgba(255, 105, 180, 0.4)",
-        "#faad14",
+        "suno",
+        "音橘",
+        "#f07a4b",
+        "#ffc0a0",
+        "#a03e17",
+        "rgba(255, 150, 130, 0.5)",
+        "#ff8a5c",
     ),
 ];
 
@@ -179,19 +174,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn presets_keep_the_electron_palettes() {
+    fn presets_match_the_renderer_characters() {
         let skins = pet_get_skins().as_array().expect("必须是数组").clone();
-        assert_eq!(skins.len(), 7, "预设皮肤数量变了老用户的收藏就对不上 id");
-        assert_eq!(skins[0]["colors"]["body"], json!("#722ed1"));
+        assert_eq!(skins.len(), 6, "6 个立绘角色，多一个少一个都会让 id 对不上立绘");
+        // id 顺序与 characters/index.ts 完全一致：渲染层按数组顺序渲染换角色菜单
+        let ids: Vec<&str> = skins.iter().filter_map(|s| s["id"].as_str()).collect();
         assert_eq!(
-            skins[0]["colors"]["blush"],
-            json!("rgba(255, 105, 180, 0.5)")
+            ids,
+            vec!["chatgpt", "claude", "gemini", "deepseek", "midjourney", "suno"]
         );
-        assert_eq!(
-            skins[3]["colors"]["blush"],
-            json!("rgba(255, 182, 193, 0.6)")
-        );
-        assert_eq!(skins[6]["id"], json!("golden"));
+        assert_eq!(skins[0]["name"], json!("茉白"));
+        assert_eq!(skins[0]["colors"]["accent"], json!("#4ecdc4"));
+        assert_eq!(skins[2]["colors"]["bodyDark"], json!("#4a2f9e"));
+        assert_eq!(skins[5]["colors"]["body"], json!("#f07a4b"));
         for skin in &skins {
             assert_eq!(skin["colors"]["eye"], json!(EYE), "{skin}");
             assert_eq!(skin["isCustom"], json!(false));

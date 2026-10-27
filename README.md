@@ -4,10 +4,16 @@
 
 ## 能力清单（对应代码，非路线图）
 
-- **萌宠窗口**：透明无边框、置顶显示且不抢前台焦点、可拖拽、支持点击穿透（`WS_EX_TRANSPARENT`）、
+- **萌宠窗口**：268×512 透明无边框、置顶显示且不抢前台焦点、可拖拽、支持点击穿透（`WS_EX_TRANSPARENT`）、
   位置跨启动持久化（`~/.z-bot/window_bounds.json`，退出/隐藏时同步补写一次）
+- **立绘看板娘**：6 个角色（茉白/夜汐/星璃/砚秋/棠青/音橘，源自「AI 娘化全家福」6 张立绘，
+  已抠成透明底 webp，520×872 供 2x 显示）。右键「换角色」即时切换，同时换配色、
+  轮廓光与人设（人设只在用户没自定义过 prompt 时才跟着换）。立绘用三层变形堆出「活着」的手感：
+  动画系统的 transform、呼吸缩放、跟随鼠标的微小倾斜各占一层，互不覆盖；
+  另有三道阴影（近身暗边 / 角色色柔光 / 落地影）保证浅色与深色壁纸下都不糊在背景里
 - **动画状态机**：17 种动画（idle/blink/walk/dance/roll/jump/wiggle/stretch/spin/yawn/sleep/chase/bounce/shake/wobble/petted）
-  + 优先级抢占 + 光标跟随（Rust 侧 `GetCursorPos` 轮询推送，渲染层不再计时轮询）+ 粒子与场景系统
+  + 优先级抢占 + 光标跟随（Rust 侧 `GetCursorPos` 轮询推送，渲染层不再计时轮询）+ 粒子与场景系统。
+  换成静态立绘后自动眨眼定时器已退役（图片没法眨眼，硬做会变成整张图缩放），`blink` 动画本身仍可经 IPC 触发
 - **语音链路**：本地 whisper.cpp STT + TTS，全部在本进程直接驱动子进程（`whisper-cli` / PowerShell `System.Speech`），
   不再有 8084/8086 两个 Node sidecar，也不再有一次性 token；按住说话、语音打断、麦克风自检、会议转录照旧
 - **AI 对话**：多提供商路由（ollama/openai/claude/gemini/deepseek/qwen/custom）、流式输出、工具调用确认与频控熔断

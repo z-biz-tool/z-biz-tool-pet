@@ -554,8 +554,17 @@ pub fn voice_interrupt(app: AppHandle) -> bool {
     true
 }
 
-/// Electron: voice:checkMicrophone —— 只有 macOS 需要主动申请权限，
-/// 而 Tauri 在 macOS 上把这件事交给了 WKWebView 自己弹框，这里等价返回"可用"
+/// Electron: voice:checkMicrophone
+///
+/// 返回值语义是「可以确定被拒了吗」，不是「麦克风好用吗」：
+/// - `false` = 确定被拒，渲染层直接弹授权引导；
+/// - `true` = 不拦，交给渲染层去试。
+///
+/// 为什么不在 Rust 里问系统：macOS 的 TCC 状态要 AVFoundation 的
+/// `AVCaptureDevice.authorizationStatus`，为一个布尔判断引 objc2 依赖不划算，而且它回答的
+/// 是「系统层面允许吗」，回答不了「这个 WebView 有没有暴露 mediaDevices」——后者才是真正
+/// 会崩的地方（缺 Info.plist 的 NSMicrophoneUsageDescription 时正是如此）。
+/// 所以真正的判据放在渲染层的 `navigator.mediaDevices` 预检里，这里保持不拦。
 #[tauri::command]
 pub fn voice_check_microphone() -> bool {
     true

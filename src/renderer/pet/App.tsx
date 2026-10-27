@@ -6,16 +6,17 @@ import {
   ANIMATION_MENU_ITEMS,
   getRandomIdleAnimation,
   getRandomIdleInterval,
-  getRandomBlinkInterval,
   canInterruptAnimation,
   getAnimationCSS,
 } from './animations';
+import { PetSkin, getSkinCSSVariables } from '../shared/skins';
 import {
-  PetSkin,
-  PRESET_SKINS,
+  CHARACTERS,
+  CHARACTER_SKINS,
+  PERSONA_PROMPTS,
+  characterOf,
   getSkinById,
-  getSkinCSSVariables,
-} from '../shared/skins';
+} from './characters';
 import {
   Emotion,
   PetStats as PetCoreStats,
@@ -33,19 +34,25 @@ const log = (msg: string) => {
 
 type PetStatus = 'idle' | 'recording' | 'thinking' | 'speaking' | 'interrupted';
 
+// 气泡文案：这是唯一一处用户「不看界面也能读懂现在在干什么」的地方，
+// 所以每一句都写成「状态 + 下一步能做什么」，而不是一个名词。
 const STATUS_TEXT: Record<PetStatus, string> = {
-  idle: '点击和我说话~',
-  recording: '🎤 录音中... 再次点击停止',
-  thinking: '🤔 思考中...',
-  speaking: '🔊 说话中... (可打断)',
-  interrupted: '⚡ 被打断!',
+  idle: '',
+  recording: '在听…再点一下结束',
+  thinking: '思考中',
+  speaking: '说话中 · 随时可以打断我',
+  interrupted: '被打断了，接着说',
 };
 
 const DEFAULT_OLLAMA = 'http://localhost:11434';
 const DEFAULT_STT = 'http://localhost:8084';
 const DEFAULT_TTS = 'http://localhost:8086';
 const DEFAULT_MODEL = 'qwen2.5:7b-instruct-q4_K_M';
-const DEFAULT_PROMPT = '你是一只可爱的桌面萌宠小猫咪，名字叫Z-Bot。性格活泼可爱、温柔体贴，用简短温馨的语言回复。';
+const DEFAULT_PET_NAME = '';
+// 旧版默认人设（一只小猫咪）。判定「用户没改过 prompt」时要认得它，
+// 否则换角色后还留着猫的设定，AI 会一边被喊名字一边自称猫。
+const LEGACY_PROMPT =
+  '你是一只可爱的桌面萌宠小猫咪，名字叫Z-Bot。性格活泼可爱、温柔体贴，用简短温馨的语言回复。';
 
 // 语音打断阈值（可配置，默认30）
 const INTERRUPT_THRESHOLD = 30;
@@ -53,12 +60,21 @@ const INTERRUPT_THRESHOLD = 30;
 // 录音硬上限：MediaRecorder 的分片全在内存里，按住不放不该无限录（02 §2.4）
 const MAX_RECORDING_MS = 30_000;
 
-// 生命周期阶段对应的体型（此前 JSX 直接引用未定义的 STAGE_SIZES）
-const STAGE_SIZES: Record<PetCoreStats['stage'], number> = {
-  egg: 90,
-  baby: 110,
-  child: 125,
-  adult: 140,
+// 成长阶段 ⇒ 立绘缩放。以前是「圆的直径 90→140」，现在换成整体缩放，
+// 幅度收窄到 0.94~1.00：放大会顶出窗口，缩小到 0.9 以下又像被丢远了。
+const STAGE_SCALE: Record<PetCoreStats['stage'], number> = {
+  egg: 0.94,
+  baby: 0.96,
+  child: 0.98,
+  adult: 1,
+};
+
+// 阶段名只用于 HUD 那一行字：状态里存的是英文枚举，直接打到中文界面上会露出「阶段 egg」。
+const STAGE_LABEL: Record<PetCoreStats['stage'], string> = {
+  egg: '孵化',
+  baby: '幼年',
+  child: '少年',
+  adult: '成年',
 };
 
 // HUD 六维属性条
@@ -70,6 +86,7 @@ const STAT_BARS: { key: keyof PetCoreStats; label: string; icon: string; color: 
   { key: 'health', label: '健康', icon: '❤️', color: '#ff4d4f' },
   { key: 'affection', label: '好感', icon: '💕', color: '#722ed1' },
 ];
+
 
 const DEFAULT_STATS: PetCoreStats = {
   hunger: 80,
@@ -86,6 +103,15 @@ const DEFAULT_STATS: PetCoreStats = {
   isSick: false,
 };
 
+/** #RRGGBB / #RGB ⇒ rgba(...)，给光晕用 */
+function withAlpha(hex: string, alpha: number): string {
+  const h = hex.replace('#', '');
+  const full = h.length === 3 ? h.split('').map((c) => c + c).join('') : h;
+  const n = parseInt(full, 16);
+  if (Number.isNaN(n)) return `rgba(140, 140, 200, ${alpha})`;
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+}
+
 function App() {
   const [status, setStatus] = useState<PetStatus>('idle');
   const [lastMessage, setLastMessage] = useState('');
@@ -95,8 +121,8 @@ function App() {
     sttUrl: DEFAULT_STT,
     ttsUrl: DEFAULT_TTS,
     modelName: DEFAULT_MODEL,
-    systemPrompt: DEFAULT_PROMPT,
-    petName: 'Z-Bot 小猫咪',
+    systemPrompt: CHARACTERS[0].persona,
+    petName: DEFAULT_PET_NAME,
     voiceSpeed: 1.0,
     particleEnabled: true,
     interruptThreshold: 30,
@@ -107,8 +133,9 @@ function App() {
   const [animationCSS, setAnimationCSS] = useState<string>(getAnimationCSS('idle'));
   const [hearts, setHearts] = useState<number[]>([]);
   const [zzzVisible, setZzzVisible] = useState(false);
-  const [eyeOffset, setEyeOffset] = useState({ x: 0, y: 0 });
-  const [isBlinking, setIsBlinking] = useState(false);
+  // 跟随鼠标的微小倾斜：旧版是「瞳孔跟随」，立绘上做不到动眼，
+  // 改成整个人向鼠标方向偏一点点 —— 更含蓄，但一样能感觉到她在看你。
+  const [cursorLean, setCursorLean] = useState({ x: 0, y: 0 });
 
   // 养成 / 情绪 / 面板状态
   const [petStats, setPetStats] = useState<PetCoreStats>(DEFAULT_STATS);
@@ -178,9 +205,12 @@ function App() {
     []
   );
 
-  // 皮肤状态
-  const [currentSkin, setCurrentSkin] = useState<PetSkin>(PRESET_SKINS[0]);
-  const [skinVars, setSkinVars] = useState<Record<string, string>>(getSkinCSSVariables(PRESET_SKINS[0]));
+  // 皮肤（= 角色）
+  const [currentSkin, setCurrentSkin] = useState<PetSkin>(CHARACTER_SKINS[0]);
+  const [skinVars, setSkinVars] = useState<Record<string, string>>(getSkinCSSVariables(CHARACTER_SKINS[0]));
+  const currentSkinRef = useRef<PetSkin>(CHARACTER_SKINS[0]);
+  currentSkinRef.current = currentSkin;
+  const persona = characterOf(currentSkin.id);
 
   // 场景和粒子状态
   const [currentScenery, setCurrentScenery] = useState({
@@ -190,10 +220,15 @@ function App() {
     backgroundColor: 'linear-gradient(135deg, #87CEEB 0%, #E0F7FA 100%)',
     particleColor: '#FFD700',
   });
-  const [particleEffects, setParticleEffects] = useState<{id: string, type: 'heart' | 'star' | 'music' | 'sparkle' | 'bounce' | 'float', content: string, enabled?: boolean}[]>([
-    { id: 'heart', type: 'heart', content: '💕' },
-    { id: 'star', type: 'star', content: '✨' },
-    { id: 'music', type: 'music', content: '🎵' },
+  // 默认从 emoji 换成光点：立绘是主角，飘落的心形星形会跟画面打架。
+  // 类型 'mote' 是新增的，旧配置里的 emoji 粒子照旧渲染，不影响存量用户。
+  const [particleEffects, setParticleEffects] = useState<
+    { id: string; type: 'heart' | 'star' | 'music' | 'sparkle' | 'bounce' | 'float' | 'mote'; content: string; enabled?: boolean }[]
+  >([
+    { id: 'm1', type: 'mote', content: '' },
+    { id: 'm2', type: 'mote', content: '' },
+    { id: 'm3', type: 'mote', content: '' },
+    { id: 'm4', type: 'mote', content: '' },
   ]);
 
   // 粒子布局只计算一次：原先把 Math.random() 写在 render 的 inline style 里，
@@ -207,9 +242,9 @@ function App() {
           type: p.type,
           content: p.content,
           style: {
-            left: `${20 + ((i * 37) % 60)}%`,
-            animation: `particleFall ${3 + ((i * 13) % 4)}s linear infinite`,
-            animationDelay: `${((i * 29) % 20) / 10}s`,
+            left: `${12 + ((i * 23) % 72)}%`,
+            animationDelay: `${((i * 17) % 46) / 10}s`,
+            animationDuration: `${6 + ((i * 7) % 5)}s`,
           } as React.CSSProperties,
         })),
     [particleEffects]
@@ -242,20 +277,23 @@ function App() {
 
   // 动画相关 refs
   const animationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const blinkTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 2026-10-21 删掉 `cursorTrackRef`：它是 Electron 时代「前端 100ms 轮询取光标位置」
   // 那条路径的遗留 —— 移植到 Tauri 时实现被删了（依赖的 window.electronAPI.getCursorPosition
-  // 不存在），但 ref 声明与卸载时的 clearInterval 漏删，于是留下一个**永远不会被赋值**的孤儿：
-  //   · clearInterval 那行永远不执行（清不掉任何东西）；
-  //   · ESLint 报 "The ref value 'cursorTrackRef.current' will likely have changed by the
-  //     time this effect cleanup function runs"（它读的是一个从不存在过的定时器句柄）。
+  // 不存在），但 ref 声明与卸载时的 clearInterval 漏删，于是留下一个**永远不会被赋值**的孤儿。
   // 光标跟随功能本身**没有丢**：已改为主进程推送（T3.2 的 applyCursorDelta）。
   const currentAnimRef = useRef<AnimationType>('idle');
   currentAnimRef.current = currentAnimation;
 
   useEffect(() => {
     log('[Pet] 组件初始化');
+    // 一条启动自检：语音是主功能，采集能力有没有被 WebView 暴露，事后靠翻日志要能一眼看出来。
+    // macOS 缺 NSMicrophoneUsageDescription 时这里会是 false，且不会弹任何权限框。
+    const canCapture = !!navigator.mediaDevices?.getUserMedia;
+    log(`[Pet] 采集能力: mediaDevices=${canCapture ? 'ok' : '不可用'}`);
+    if (!canCapture) {
+      log('[Pet] 提示：本机 WebView 未暴露 mediaDevices，语音输入与打断将不可用');
+    }
 
     // preload 注入失败时宠物仍要能动，但必须让用户知道为什么点什么都没反应
     if (!window.electronAPI) {
@@ -266,26 +304,29 @@ function App() {
     // 加载配置
     window.electronAPI?.loadConfig().then((cfg) => {
       if (cfg) {
+        // 角色：老配置里是 'default-purple' 这类已下线的 id，getSkinById 会退回第一个角色
+        const skin = getSkinById(cfg.currentSkinId);
+        setCurrentSkin(skin);
+        setSkinVars(getSkinCSSVariables(skin));
+
+        const personaOfSkin = characterOf(skin.id).persona;
+        const savedPrompt = cfg.systemPrompt;
+        // 没写过、或还是旧版猫咪设定、或还是某个角色的人设 ⇒ 跟随当前角色
+        const promptIsDefault =
+          !savedPrompt || savedPrompt === LEGACY_PROMPT || PERSONA_PROMPTS.includes(savedPrompt);
+
         setConfig({
           ollamaUrl: cfg.ollamaUrl || DEFAULT_OLLAMA,
           sttUrl: cfg.sttUrl || DEFAULT_STT,
           ttsUrl: cfg.ttsUrl || DEFAULT_TTS,
           modelName: cfg.modelName || DEFAULT_MODEL,
-          systemPrompt: cfg.systemPrompt || DEFAULT_PROMPT,
-          petName: cfg.petName || 'Z-Bot 小猫咪',
+          systemPrompt: promptIsDefault ? personaOfSkin : savedPrompt,
+          petName: cfg.petName === 'Z-Bot 小猫咪' ? DEFAULT_PET_NAME : cfg.petName || DEFAULT_PET_NAME,
           voiceSpeed: cfg.voiceSpeed || 1.0,
           interruptThreshold: cfg.interruptThreshold || 30,
           particleEnabled: cfg.particleEnabled !== false,
         });
         interruptThresholdRef.current = cfg.interruptThreshold || 30;
-        // 加载皮肤
-        if (cfg.currentSkinId) {
-          const skin = getSkinById(cfg.currentSkinId);
-          if (skin) {
-            setCurrentSkin(skin);
-            setSkinVars(getSkinCSSVariables(skin));
-          }
-        }
       }
     }).catch((e: any) => {
       // 读配置失败只降级到默认值，宠物必须照常可见可点
@@ -296,8 +337,6 @@ function App() {
     const unsubStart = window.electronAPI?.onVoiceStart(() => startRecording());
     const unsubStop = window.electronAPI?.onVoiceStop(() => stopRecording());
 
-    // 启动眨眼定时器
-    startBlinkTimer();
     // 启动空闲动画调度
     startIdleScheduler();
     // 拉取养成状态并订阅主进程推送
@@ -322,14 +361,14 @@ function App() {
     const unsubSkin = window.electronAPI?.onApplySkin?.((skin: PetSkin) => {
       applySkin(skin);
     });
-    
+
     // 加载场景和粒子设置
     try {
       const savedScenery = localStorage.getItem('current_scenery');
       if (savedScenery) {
         setCurrentScenery(JSON.parse(savedScenery));
       }
-      
+
       const savedParticles = localStorage.getItem('particle_settings');
       if (savedParticles) {
         setParticleEffects(JSON.parse(savedParticles));
@@ -369,7 +408,6 @@ function App() {
       clearInterval(statsTimer);
       if (hintTimerRef.current) clearTimeout(hintTimerRef.current);
       if (animationTimerRef.current) clearTimeout(animationTimerRef.current);
-      if (blinkTimerRef.current) clearTimeout(blinkTimerRef.current);
       if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -427,35 +465,23 @@ function App() {
   // ref 转发：让早于本函数声明的闭包（triggerAnimation 内部）能调到最新实现
   startIdleSchedulerRef.current = startIdleScheduler;
 
-  const startBlinkTimer = useCallback(() => {
-    if (blinkTimerRef.current) clearTimeout(blinkTimerRef.current);
-    blinkTimerRef.current = setTimeout(() => {
-      if (statusRef.current === 'idle') {
-        setIsBlinking(true);
-        setTimeout(() => setIsBlinking(false), 300);
-      }
-      startBlinkTimer();
-    }, getRandomBlinkInterval());
-  }, []);
-
   // 鼠标追踪改为消费主进程推送（T3.2）：渲染端不再有 100ms 轮询定时器
   const applyCursorDelta = useCallback((delta: { dx: number; dy: number }) => {
     cursorDeltaRef.current = delta;
     if (statusRef.current !== 'idle') return;
     if (currentAnimRef.current !== 'idle' && currentAnimRef.current !== 'float') return;
-    const maxOffset = 3;
-    const dist = Math.sqrt(delta.dx * delta.dx + delta.dy * delta.dy) || 1;
-    setEyeOffset({
-      x: Math.round((delta.dx / dist) * maxOffset * 10) / 10,
-      y: Math.round((delta.dy / dist) * maxOffset * 10) / 10,
+    const { dx, dy } = delta;
+    const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+    const reach = 2.4;
+    setCursorLean({
+      x: Math.round((dx / dist) * reach * 10) / 10,
+      y: Math.round((dy / dist) * reach * 10) / 10,
     });
   }, []);
 
-  // ---------- 皮肤系统 ----------
+  // ---------- 皮肤（角色）系统 ----------
 
-  const applySkin = useCallback((skin: PetSkin) => {
-    setCurrentSkin(skin);
-    setSkinVars(getSkinCSSVariables(skin));
+  const persistSkin = useCallback((skin: PetSkin) => {
     window.electronAPI
       ?.loadConfig()
       .then((cfg) => {
@@ -466,12 +492,71 @@ function App() {
         // 皮肤已在本窗生效；落盘失败只影响下次启动，记日志但不再打断用户
         log('[Pet] 皮肤保存失败: ' + errorMessage(error, '主进程无响应'));
       });
-    log('[Pet] 应用皮肤: ' + skin.name);
   }, []);
+
+  const applySkin = useCallback((skin: PetSkin) => {
+    // 三条来路都要收敛到同一件事：
+    //   1. pet:applySkin 送 id ⇒ 桥接层回查 Rust 色板，拿回来的是「有配色、没立绘」的对象；
+    //   2. pet:applySkinData 送 AI 自定义色板 ⇒ 同理；
+    //   3. 本地换角色 ⇒ 自带立绘。
+    // 前两种如果直接 set，立绘区域会空掉，所以先按 id 认回本地角色；
+    // 认不出来的（AI 自定义色板）保留当前人像、只换配色。
+    const known = CHARACTER_SKINS.find((s) => s.id === skin.id);
+    const merged: PetSkin = known
+      ? known
+      : {
+          ...skin,
+          portrait: currentSkinRef.current.portrait,
+          face: currentSkinRef.current.face,
+          role: currentSkinRef.current.role,
+          greeting: currentSkinRef.current.greeting,
+        };
+    setCurrentSkin(merged);
+    setSkinVars(getSkinCSSVariables(merged));
+    persistSkin(merged);
+    log('[Pet] 应用角色/配色: ' + merged.name);
+  }, [persistSkin]);
+
+  /** 换角色：配色 + 立绘 + 人设（人设只在用户没自定义过时才跟着换） */
+  const selectCharacter = useCallback((id: string) => {
+    const skin = getSkinById(id);
+    const nextPersona = characterOf(id).persona;
+    setCurrentSkin(skin);
+    setSkinVars(getSkinCSSVariables(skin));
+    setLastMessage('');
+    setConfig((prev) => {
+      const promptIsDefault = !prev.systemPrompt || PERSONA_PROMPTS.includes(prev.systemPrompt);
+      return promptIsDefault ? { ...prev, systemPrompt: nextPersona } : prev;
+    });
+    window.electronAPI
+      ?.loadConfig()
+      .then((cfg) => {
+        if (!cfg) return undefined;
+        const promptIsDefault =
+          !cfg.systemPrompt || cfg.systemPrompt === LEGACY_PROMPT || PERSONA_PROMPTS.includes(cfg.systemPrompt);
+        return window.electronAPI?.saveConfig({
+          ...cfg,
+          currentSkinId: skin.id,
+          ...(promptIsDefault ? { systemPrompt: nextPersona } : {}),
+        });
+      })
+      .catch((error) => {
+        log('[Pet] 角色切换落盘失败: ' + errorMessage(error, '主进程无响应'));
+      });
+    flashHint(`换成了 ${skin.name}`, 2200);
+    log('[Pet] 切换角色: ' + skin.id);
+  }, [flashHint]);
 
   // ---------- 语音打断监听 ----------
   const startInterruptListener = async () => {
     if (isSpeakingRef.current && interruptStreamRef.current) return;
+
+    // 打断监听是「锦上添花」：拿不到麦克风就静静退出，不要在这里弹权限引导打断用户。
+    // 但也不能什么都不记 —— 否则用户会觉得语音打断偶尔失灵而查不到原因。
+    if (!navigator.mediaDevices?.getUserMedia) {
+      log('[Pet] 语音打断不可用：本机 WebView 未暴露 mediaDevices');
+      return;
+    }
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -506,7 +591,7 @@ function App() {
       };
       checkVolume();
     } catch (error: any) {
-      log('[Pet] 启动打断监听失败: ' + error.message);
+      log('[Pet] 启动打断监听失败: ' + errorMessage(error, '未知错误'));
     }
   };
 
@@ -560,6 +645,17 @@ function App() {
       const granted = await window.electronAPI?.checkMicrophone();
       if (granted === false) {
         log('[Pet] 麦克风未授权，显示引导');
+        setMicGuide(true);
+        setStatus('idle');
+        return;
+      }
+
+      // 第二道关：这台机器的 WKWebView 到底有没有暴露采集能力。
+      // macOS 上 Info.plist 缺 NSMicrophoneUsageDescription 时 mediaDevices 是 undefined，
+      // 直接写 getUserMedia 会抛 TypeError（onclick 一片安静，用户以为点坏了）。
+      // 分不清是「系统没声明」还是「权限被拒」，两种情况都走麦克风引导，让用户有一条路可走。
+      if (!navigator.mediaDevices?.getUserMedia) {
+        log('[Pet] 本机 WebView 无采集能力（mediaDevices 不可用），显示引导');
         setMicGuide(true);
         setStatus('idle');
         return;
@@ -621,7 +717,7 @@ function App() {
     log('[Pet] 开始截图分析...');
     setContextMenu((prev) => ({ ...prev, show: false }));
     setStatus('thinking');
-    flashHint('📸 正在分析屏幕...', 8000);
+    flashHint('正在分析屏幕…', 8000);
     try {
       const result = await window.electronAPI?.captureAndAnalyze();
       if (result?.success && result.analysis) {
@@ -844,12 +940,12 @@ function App() {
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    // 200×320 的窗口放不下从点击点向下展开的整份菜单：先按菜单尺寸夹进视口
+    // 268×512 的窗口放不下从点击点向下展开的整份菜单：先按菜单尺寸夹进视口
     const { x, y } = clampMenuPosition(
       e.clientX,
       e.clientY,
       { width: window.innerWidth, height: window.innerHeight },
-      { width: 170, height: 280 }
+      { width: 190, height: 470 }
     );
     setContextMenu({ x, y, show: true });
   };
@@ -874,7 +970,7 @@ function App() {
   };
 
   const handleSkinSelect = (skin: PetSkin) => {
-    applySkin(skin);
+    selectCharacter(skin.id);
     setContextMenu({ ...contextMenu, show: false });
     setSkinMenuOpen(false);
   };
@@ -915,68 +1011,41 @@ function App() {
     const handler = () => handleClickOutside();
     window.addEventListener('click', handler);
     return () => window.removeEventListener('click', handler);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [contextMenu.show]);
 
-  // ---------- 眼睛/嘴巴 根据 status + animation + emotion 变化 ----------
-  const getEyeShape = (): string => {
-    if (status === 'thinking') return 'thinking';
-    if (petStats.isSleeping || currentAnimation === 'sleep') return 'closed';
-    if (status === 'interrupted') return 'surprised';
-    if (isBlinking) return 'blink';
-    if (currentAnimation === 'yawn') return 'sleepy';
-    switch (currentEmotion) {
-      case 'happy': case 'excited': case 'playful': return 'happy';
-      case 'sad': case 'comforting': return 'blink'; // 半闭眼
-      case 'angry': case 'tsundere': return 'angry';
-      case 'shy': case 'cute': return 'sleepy'; // 害羞半闭
-      case 'scared': case 'surprised': return 'surprised';
-      case 'sleepy': return 'sleepy';
-      case 'loving': return 'happy';
-      case 'proud': case 'dominant': return 'happy';
-      default: return 'normal';
-    }
-  };
+  // ---------- 气泡文案 ----------
+  // 一处收敛所有「现在在干什么」：优先回报 AI 的话，其次回报状态。
+  const showMessage = status === 'idle' && !!lastMessage;
+  const bubbleText = showMessage
+    ? lastMessage
+    : status === 'idle'
+      ? persona.greeting
+      : STATUS_TEXT[status];
 
-  const getMouthShape = (): string => {
-    if (status === 'speaking') return 'speaking';
-    if (status === 'recording') return 'o';
-    if (status === 'thinking') return 'flat';
-    if (status === 'interrupted') return 'o';
-    if (currentAnimation === 'yawn') return 'yawn';
-    if (currentAnimation === 'sleep') return 'sleep';
-    switch (currentEmotion) {
-      case 'happy': case 'excited': case 'playful': return 'smile';
-      case 'sad': return 'flat';
-      case 'angry': case 'tsundere': return 'flat';
-      case 'shy': case 'cute': return 'smile';
-      case 'scared': return 'o';
-      case 'surprised': return 'o';
-      case 'sleepy': return 'yawn';
-      case 'loving': return 'smile';
-      case 'proud': return 'smile';
-      default: return 'smile';
-    }
-  };
+  // 属性告急 ⇒ 露出快捷动作（和以前一样的触发条件）
+  const needsCare =
+    petStats.hunger < 60 ||
+    petStats.happiness < 60 ||
+    petStats.cleanliness < 60 ||
+    petStats.isSick ||
+    (!petStats.isSleeping && petStats.energy < 50);
 
-  const eyeShape = getEyeShape();
-  const mouthShape = getMouthShape();
+  const stageScale = STAGE_SCALE[petStats.stage] ?? 1;
+  const displayName = config.petName?.trim() || persona.name;
+
+  // 自定义变量只能按 CSSProperties 断言进 style：TS 的 CSSProperties 不认识 --x
+  const rootStyle = {
+    ...skinVars,
+    '--aura-color': persona.glow,
+    '--scene-color': withAlpha(currentScenery.particleColor || '#8aa0c0', 0.22),
+  } as React.CSSProperties;
 
   return (
     <div
-      style={{
-        width: 200,
-        height: 320,
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        userSelect: 'none',
-        fontFamily: 'system-ui, -apple-system, "PingFang SC", sans-serif',
-        cursor: 'grab',
-        background: currentScenery.backgroundColor,
-        ...skinVars,
-      }}
+      className={`pet-root ${EMOTION_CONFIGS[currentEmotion].cssClass} ${
+        petStats.isSick ? 'pet-sick' : ''
+      }`}
+      style={rootStyle}
       onMouseDown={handleMouseDown}
       onClick={handlePetClick}
       onDoubleClick={handleDoubleClick}
@@ -984,113 +1053,87 @@ function App() {
       onMouseEnter={() => setShowHUD(true)}
       onMouseLeave={() => setShowHUD(false)}
     >
-      {/* 场景粒子效果层：particleEnabled 关闭时完全不渲染，避免常驻 infinite 动画占用合成开销 */}
+      {/* 场景氛围光（管理端的场景配色落在这里）+ 角色自己的轮廓光 */}
+      <div className="aura ambient" />
+      <div className="aura" />
+      <div className="ground-shadow" />
+
+      {/* 场景粒子：particleEnabled 关闭时完全不渲染，避免常驻动画占合成开销 */}
       {config.particleEnabled && (
         <div className="particle-layer">
           {particleLayouts.map((layout, idx) => (
-            <div
-              key={`${layout.id}-${idx}`}
-              className={`particle ${layout.type}`}
-              style={layout.style}
-            >
-              {layout.content}
+            <div key={`${layout.id}-${idx}`} className={`particle ${layout.type}`} style={layout.style}>
+              {layout.type === 'mote' ? null : layout.content}
             </div>
           ))}
         </div>
       )}
-      
-      {/* CSS 绘制的圆形萌宠角色 */}
-      <div
-        className={`pet-body ${EMOTION_CONFIGS[currentEmotion].cssClass} ${petStats.isSick ? 'pet-sick' : ''}`}
-        style={{ animation: animationCSS, width: STAGE_SIZES[petStats.stage] || 120, height: STAGE_SIZES[petStats.stage] || 120 }}
-      >
-        {/* 眼睛 */}
-        <div className="eyes">
-          <div className={`eye eye-${eyeShape}`} style={eyeShape === 'normal' ? { transform: `translate(${eyeOffset.x}px, ${eyeOffset.y}px)` } : undefined}>
-            <div className="pupil" style={eyeShape === 'normal' ? { transform: `translate(${eyeOffset.x * 0.5}px, ${eyeOffset.y * 0.5}px)` } : undefined} />
-          </div>
-          <div className={`eye eye-${eyeShape}`} style={eyeShape === 'normal' ? { transform: `translate(${eyeOffset.x}px, ${eyeOffset.y}px)` } : undefined}>
-            <div className="pupil" style={eyeShape === 'normal' ? { transform: `translate(${eyeOffset.x * 0.5}px, ${eyeOffset.y * 0.5}px)` } : undefined} />
-          </div>
-        </div>
-        {/* 嘴巴 */}
-        <div className={`mouth mouth-${mouthShape}`} />
-        {/* 腮红 */}
-        <div className="blush blush-left" />
-        <div className="blush blush-right" />
 
-        {/* thinking 时的旋转圈 */}
-        {status === 'thinking' && <div className="thinking-ring" />}
-        {/* recording 时的脉冲圈 */}
-        {status === 'recording' && <div className="recording-ring" />}
-        {/* speaking 时的声波 + 可打断提示 */}
-        {status === 'speaking' && (
-          <>
-            <div className="sound-waves">
-              <span /><span /><span />
-            </div>
-            <div className="interrupt-hint">可打断</div>
-          </>
-        )}
-        {/* interrupted 时的闪烁效果 */}
-        {status === 'interrupted' && <div className="interrupt-flash" />}
-
-        {/* 爱心动画（petted时） */}
-        {hearts.map((id, i) => (
+      {/* 立绘：stage 承接动画系统的 transform，breathe 管呼吸，look 管跟随。
+          成长缩放放在 look 上 —— CSS 动画会覆盖同一元素的 transform，
+          写在外层 stage 上的 scale 会被 animIdle 顶掉，只在静止时才生效。 */}
+      <div className="char-stage" style={{ animation: animationCSS }}>
+        <div className="char-breathe">
           <div
-            key={id}
-            className="heart-particle"
-            style={{ left: 30 + i * 25, animationDelay: `${i * 0.15}s` }}
+            className="char-look"
+            style={{ transform: `translate(${cursorLean.x}px, ${cursorLean.y}px) scale(${stageScale})` }}
           >
-            💕
+            <img className="char-img" src={currentSkin.portrait} alt={persona.name} draggable={false} />
           </div>
-        ))}
 
-        {/* Zzz气泡（sleep时） */}
-        {zzzVisible && (
-          <div className="zzz-container">
-            <span className="zzz" style={{ animationDelay: '0s' }}>Z</span>
-            <span className="zzz" style={{ animationDelay: '0.5s', fontSize: 14 }}>z</span>
-            <span className="zzz" style={{ animationDelay: '1s', fontSize: 11 }}>z</span>
-          </div>
-        )}
+          {status === 'thinking' && <div className="ring ring-thinking" />}
+          {status === 'recording' && <div className="ring ring-recording" />}
+          {status === 'speaking' && (
+            <div className="sound-waves">
+              <span />
+              <span />
+              <span />
+            </div>
+          )}
+          {status === 'interrupted' && <div className="interrupt-flash" />}
+
+          {hearts.map((id, i) => (
+            <div key={id} className="heart-particle" style={{ left: 60 + i * 34, animationDelay: `${i * 0.15}s` }}>
+              💕
+            </div>
+          ))}
+
+          {zzzVisible && (
+            <div className="zzz-container">
+              <span className="zzz" style={{ animationDelay: '0s' }}>Z</span>
+              <span className="zzz" style={{ animationDelay: '0.6s', fontSize: 13 }}>z</span>
+              <span className="zzz" style={{ animationDelay: '1.2s', fontSize: 11 }}>z</span>
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* 状态文字 */}
-      <div className="status-text">{STATUS_TEXT[status]}</div>
-
-      {/* 最近消息 */}
-      {lastMessage && status === 'idle' && (
-        <div className="last-message" title={lastMessage}>{lastMessage}</div>
+      {/* 对话气泡 */}
+      {bubbleText && (
+        <div
+          className={`bubble ${showMessage ? 'is-message' : ''} ${status === 'thinking' ? 'is-thinking' : ''}`}
+          title={showMessage ? lastMessage : undefined}
+          key={showMessage ? 'msg' : status}
+        >
+          {bubbleText}
+          {status === 'thinking' && (
+            <span className="dots">
+              <i /><i /><i />
+            </span>
+          )}
+        </div>
       )}
 
-      {/* 提示 */}
+      {hint && <div className="toast">{hint}</div>}
+
       {micGuide && (
-        <div
-          className="mic-guide"
-          style={{
-            position: 'absolute',
-            left: 6,
-            right: 6,
-            bottom: 44,
-            padding: '8px 10px',
-            borderRadius: 10,
-            background: 'rgba(26, 26, 46, 0.94)',
-            color: '#fff',
-            fontSize: 11,
-            lineHeight: 1.5,
-            boxShadow: '0 4px 14px rgba(0,0,0,0.35)',
-            zIndex: 20,
-          }}
-        >
-          <div>需要麦克风权限才能语音对话 🎤</div>
-          <div style={{ fontSize: 10, opacity: 0.75 }}>
-            系统设置 → 隐私与安全性 → 麦克风 → 允许 Z-Bot
-          </div>
-          <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+        <div className="mic-guide">
+          <div>需要麦克风权限才能语音对话</div>
+          <div className="sub">系统设置 → 隐私与安全性 → 麦克风 → 允许 zBiz 看板娘</div>
+          <div className="row">
             <button
-              style={{ flex: 1, fontSize: 11, padding: '2px 6px', borderRadius: 6, cursor: 'pointer' }}
-              onClick={async () => {
+              onClick={async (e) => {
+                e.stopPropagation();
                 const ok = await window.electronAPI?.checkMicrophone();
                 if (ok !== false) {
                   setMicGuide(false);
@@ -1101,8 +1144,10 @@ function App() {
               重试授权
             </button>
             <button
-              style={{ flex: 1, fontSize: 11, padding: '2px 6px', borderRadius: 6, cursor: 'pointer' }}
-              onClick={() => setMicGuide(false)}
+              onClick={(e) => {
+                e.stopPropagation();
+                setMicGuide(false);
+              }}
             >
               知道了
             </button>
@@ -1110,127 +1155,138 @@ function App() {
         </div>
       )}
 
-      {hint && <div className="hint">{hint}</div>}
-      {!hint && status === 'idle' && <div className="hint">右键更多选项 | 双击摸摸我</div>}
-
-      {/* 宠物状态条 HUD - 悬停显示 */}
-      {showHUD && (
-        <div className="pet-hud">
-          {STAT_BARS.map(({ key, label, icon, color }) => {
-            const value = petStats[key] as number;
-            return (
-              <div key={key} className="hud-row">
-                <span className="hud-icon">{icon}</span>
-                <span className="hud-label">{label}</span>
-                <div className="hud-bar-bg">
-                  <div className="hud-bar-fill" style={{ width: `${value}%`, background: color }} />
-                </div>
-                <span className="hud-value">{Math.round(value)}</span>
-              </div>
-            );
-          })}
-          <div className="hud-row hud-info">
-            <span>好感: {Math.round(petStats.affection)}💕</span>
-            <span>阶段: {petStats.stage}</span>
-            <span>年龄: {petStats.age}天</span>
+      {/* 底部：快捷动作 / HUD / 名牌 */}
+      <div className="dock" onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
+        {status === 'idle' && needsCare && (
+          <div className="actions">
+            {petStats.hunger < 60 && (
+              <button className="action-btn" aria-label="喂食" title="喂食" onClick={() => handlePetAction('feed')}>🍖</button>
+            )}
+            {petStats.happiness < 60 && (
+              <button className="action-btn" aria-label="玩耍" title="玩耍" onClick={() => handlePetAction('play')}>🎮</button>
+            )}
+            {petStats.cleanliness < 60 && (
+              <button className="action-btn" aria-label="洗澡" title="洗澡" onClick={() => handlePetAction('wash')}>🛁</button>
+            )}
+            {!petStats.isSleeping && petStats.energy < 50 && (
+              <button className="action-btn" aria-label="睡觉" title="睡觉" onClick={() => handlePetAction('sleep')}>💤</button>
+            )}
+            {petStats.isSick && (
+              <button className="action-btn" aria-label="治疗" title="治疗" onClick={() => handlePetAction('medicine')}>💊</button>
+            )}
           </div>
-        </div>
-      )}
+        )}
 
-      {/* 交互按钮 - 属性低时自动显示 */}
-      {status === 'idle' && (petStats.hunger < 60 || petStats.happiness < 60 || petStats.cleanliness < 60 || petStats.isSick || (!petStats.isSleeping && petStats.energy < 50)) && (
-        <div className="action-buttons">
-          {petStats.hunger < 60 && <button className="action-btn" aria-label="喂食" title="喂食" onClick={(e) => { e.stopPropagation(); handlePetAction('feed'); }}>🍖</button>}
-          {petStats.happiness < 60 && <button className="action-btn" aria-label="玩耍" title="玩耍" onClick={(e) => { e.stopPropagation(); handlePetAction('play'); }}>🎮</button>}
-          {petStats.cleanliness < 60 && <button className="action-btn" aria-label="洗澡" title="洗澡" onClick={(e) => { e.stopPropagation(); handlePetAction('wash'); }}>🛁</button>}
-          {!petStats.isSleeping && petStats.energy < 50 && <button className="action-btn" aria-label="睡觉" title="睡觉" onClick={(e) => { e.stopPropagation(); handlePetAction('sleep'); }}>💤</button>}
-          {petStats.isSick && <button className="action-btn" aria-label="治疗" title="治疗" onClick={(e) => { e.stopPropagation(); handlePetAction('medicine'); }}>💊</button>}
-        </div>
-      )}
+        {showHUD && (
+          <div className="hud">
+            <div className="hud-grid">
+              {STAT_BARS.map(({ key, label, icon, color }) => {
+                const value = petStats[key] as number;
+                return (
+                  <div key={key} className="hud-row">
+                    <span className="hud-icon">{icon}</span>
+                    <span className="hud-label">{label}</span>
+                    <div className="hud-bar-bg">
+                      <div className="hud-bar-fill" style={{ width: `${value}%`, background: color }} />
+                    </div>
+                    <span className="hud-value">{Math.round(value)}</span>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="hud-foot">
+              <span>好感 <b>{Math.round(petStats.affection)}</b></span>
+              <span>阶段 <b>{STAGE_LABEL[petStats.stage] ?? petStats.stage}</b></span>
+              <span><b>{petStats.age}</b> 天</span>
+            </div>
+          </div>
+        )}
 
-      {/* 管理端按钮 */}
-      <button className="admin-btn" onClick={(e) => { e.stopPropagation(); toggleMode(); }}>
-        💬 管理端
-      </button>
+        <div className="plate" onClick={toggleMode} title="打开管理端">
+          {currentSkin.face ? (
+            <img className="plate-face" src={currentSkin.face} alt={persona.name} draggable={false} />
+          ) : (
+            <span className="skin-dot" style={{ background: currentSkin.colors.bodyLight, width: 32, height: 32 }} />
+          )}
+          <div className="plate-meta">
+            <span className="plate-name">{displayName}</span>
+            <span className="plate-role">{persona.role}</span>
+          </div>
+          <span className="emotion-chip">{EMOTION_CONFIGS[currentEmotion].toneModifier}</span>
+          <button
+            className="plate-gear"
+            aria-label="管理端"
+            title="管理端"
+            onClick={(e) => {
+              e.stopPropagation();
+              toggleMode();
+            }}
+          >
+            ⚙
+          </button>
+        </div>
+      </div>
 
       {/* 右键菜单 */}
       {contextMenu.show && (
         <div
           className="context-menu"
           role="menu"
-          aria-label="宠物右键菜单"
+          aria-label="看板娘右键菜单"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onClick={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
         >
-          <div className="menu-item" onClick={captureAndAnalyzeScreen}>
-            📸 截图分析
-          </div>
+          <div className="menu-item" onClick={captureAndAnalyzeScreen}>📸 截图分析</div>
           <div className="menu-separator" />
-          <div className="menu-section-label">🐾 宠物养成</div>
-          <div className="menu-item" onClick={() => { handlePetAction('feed'); setContextMenu({ ...contextMenu, show: false }); }}>
-            🍖 喂食 (饱食+30)
-          </div>
-          <div className="menu-item" onClick={() => { handlePetAction('play'); setContextMenu({ ...contextMenu, show: false }); }}>
-            🎮 玩耍 (快乐+20)
-          </div>
-          <div className="menu-item" onClick={() => { handlePetAction('wash'); setContextMenu({ ...contextMenu, show: false }); }}>
-            🛁 洗澡 (清洁+40)
-          </div>
-          <div className="menu-item" onClick={() => { handlePetAction('sleep'); setContextMenu({ ...contextMenu, show: false }); }}>
-            💤 {petStats.isSleeping ? '起床' : '睡觉'}
-          </div>
-          <div className="menu-item" onClick={() => { handlePetAction('medicine'); setContextMenu({ ...contextMenu, show: false }); }}>
-            💊 治疗 (健康+30)
-          </div>
-          <div className="menu-item" onClick={() => { handlePetAction('pet'); setContextMenu({ ...contextMenu, show: false }); }}>
-            🤚 抚摸 (好感+1)
-          </div>
+          <div className="menu-section-label">宠物养成</div>
+          <div className="menu-item" onClick={() => { handlePetAction('feed'); setContextMenu({ ...contextMenu, show: false }); }}>🍖 喂食 (饱食+30)</div>
+          <div className="menu-item" onClick={() => { handlePetAction('play'); setContextMenu({ ...contextMenu, show: false }); }}>🎮 玩耍 (快乐+20)</div>
+          <div className="menu-item" onClick={() => { handlePetAction('wash'); setContextMenu({ ...contextMenu, show: false }); }}>🛁 洗澡 (清洁+40)</div>
+          <div className="menu-item" onClick={() => { handlePetAction('sleep'); setContextMenu({ ...contextMenu, show: false }); }}>💤 {petStats.isSleeping ? '起床' : '睡觉'}</div>
+          <div className="menu-item" onClick={() => { handlePetAction('medicine'); setContextMenu({ ...contextMenu, show: false }); }}>💊 治疗 (健康+30)</div>
+          <div className="menu-item" onClick={() => { handlePetAction('pet'); setContextMenu({ ...contextMenu, show: false }); }}>🤚 抚摸 (好感+1)</div>
           <div className="menu-separator" />
+          <div
+            className="menu-item has-submenu"
+            onMouseEnter={() => setSkinMenuOpen(true)}
+            onMouseLeave={() => setSkinMenuOpen(false)}
+          >
+            <span>🎀 换角色</span>
+            {skinMenuOpen && (
+              <div className="submenu">
+                {CHARACTER_SKINS.map((skin) => (
+                  <div
+                    key={skin.id}
+                    className={`submenu-item ${currentSkin.id === skin.id ? 'active' : ''}`}
+                    onClick={() => handleSkinSelect(skin)}
+                  >
+                    {skin.face && <img className="menu-face" src={skin.face} alt="" draggable={false} />}
+                    <span>{skin.name}</span>
+                    <span className="role">{skin.role?.split(' · ')[0]}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
           <div
             className="menu-item has-submenu"
             onMouseEnter={() => setAnimMenuOpen(true)}
             onMouseLeave={() => setAnimMenuOpen(false)}
           >
-            🎭 动画 ▸
+            <span>🎭 动作</span>
             {animMenuOpen && (
               <div className="submenu">
                 {ANIMATION_MENU_ITEMS.map((item) => (
-                  <div
-                    key={item.value}
-                    className="submenu-item"
-                    onClick={() => handleAnimSelect(item.value)}
-                  >
+                  <div key={item.value} className="submenu-item" onClick={() => handleAnimSelect(item.value)}>
                     {item.label}
                   </div>
                 ))}
               </div>
             )}
           </div>
-          <div
-            className="menu-item has-submenu"
-            onMouseEnter={() => setSkinMenuOpen(true)}
-            onMouseLeave={() => setSkinMenuOpen(false)}
-          >
-            🎨 皮肤 ▸
-            {skinMenuOpen && (
-              <div className="submenu">
-                {PRESET_SKINS.map((skin) => (
-                  <div
-                    key={skin.id}
-                    className={`submenu-item ${currentSkin.id === skin.id ? 'active' : ''}`}
-                    onClick={() => handleSkinSelect(skin)}
-                  >
-                    <span className="skin-dot" style={{ background: skin.colors.bodyLight }} />
-                    {skin.name}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
           <div className="menu-separator" />
-          <div className="menu-item" onClick={() => { triggerAnimation('idle', 'user'); setContextMenu({ ...contextMenu, show: false }); }}>
-            🏠 回到待机
-          </div>
+          <div className="menu-item" onClick={() => { triggerAnimation('idle', 'user'); setContextMenu({ ...contextMenu, show: false }); }}>🏠 回到待机</div>
         </div>
       )}
 

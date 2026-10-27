@@ -20,9 +20,11 @@ export interface AnimationConfig {
 // ---------- CSS Keyframes 定义 ----------
 
 export const ANIMATION_KEYFRAMES = `
+/* 立绘版的待机：以前 120px 的圆猫飘 10px 刚合适，436px 的人像飘 10px
+   会像在坐电梯；改成 5px + 0.6 度，靠 .char-breathe 的呼吸补足「活着」的感觉 */
 @keyframes animIdle {
   0%, 100% { transform: translateY(0) rotate(0deg); }
-  50% { transform: translateY(-10px) rotate(2deg); }
+  50% { transform: translateY(-5px) rotate(0.6deg); }
 }
 @keyframes animFloat {
   0%, 100% { transform: translateY(0) scale(1); }
@@ -152,7 +154,7 @@ export const ANIMATION_KEYFRAMES = `
 
 export const ANIMATIONS: Record<AnimationType, AnimationConfig> = {
   idle: {
-    duration: 3000,
+    duration: 4200,
     keyframes: 'animIdle',
     timing: 'ease-in-out',
     iteration: 'infinite',

@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Tauri 会把这份 src-tauri/Info.plist 合并进打包产物的 Info.plist。
+	     这条不是「优化项」而是硬前提：macOS 上缺少 NSMicrophoneUsageDescription 时，
+	     WKWebView 的 navigator.mediaDevices 直接是 undefined —— 连权限弹窗都不会出现，
+	     页面里对 getUserMedia 的任何调用都是 TypeError。表现为「点一下没反应」，日志里只有
+	     一句 undefined is not an object。做完这项要在测试机上 tccutil reset Microphone 再看一次。 -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>zBiz 看板娘需要用麦克风听你说话，把语音转成文字交给 AI。录音只在本机内存里暂存，识别完立刻丢弃，不上传、不留档。</string>
+</dict>
+</plist>

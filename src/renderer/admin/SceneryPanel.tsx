@@ -137,7 +137,11 @@ const SceneryPanel: React.FC<SceneryPanelProps> = ({ open }) => {
   return (
     <>
       <Card title="场景切换">
-        <Title level={5}>预设场景</Title>
+        <Text type="secondary" style={{ fontSize: 12 }}>
+          场景不再铺满看板娘窗口（那会变成桌面上的一块色卡），改为她身后的环境光与粒子色；
+          选中后立刻在宠物窗口生效。
+        </Text>
+        <Title level={5} style={{ marginTop: 12 }}>预设场景</Title>
         <Row gutter={16}>
           {PRESET_SCENERIES.map((scenery) => (
             <Col span={6} key={scenery.id}>
