@@ -331,6 +331,13 @@ html, body, #root {
   color: #eef0f6;
 }
 .bubble.is-thinking { color: rgba(240, 242, 250, 0.86); }
+/* 她主动说的话：视觉等级要低于 AI 回答，否则用户会分不清哪句是需要读的 */
+.bubble.is-say {
+  font-size: 11.5px;
+  color: rgba(236, 240, 250, 0.92);
+  border-color: color-mix(in srgb, var(--pet-accent) 26%, transparent);
+  background: rgba(15, 16, 24, 0.68);
+}
 .bubble .dots { display: inline-block; }
 .bubble .dots i {
   display: inline-block;
@@ -446,6 +453,37 @@ html, body, #root {
   transition: background 0.2s ease, transform 0.25s ease;
 }
 .plate-gear:hover { background: rgba(255, 255, 255, 0.2); transform: rotate(35deg); }
+
+/* 专注胶囊：替代情绪标签占位。倒计时必须一直看得见 ——
+   一个只在菜单里存在的番茄钟，用户永远不会记得它在走。 */
+.focus-pill {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.3px;
+  padding: 3px 7px;
+  border-radius: 9px;
+  cursor: pointer;
+  color: #fff;
+  background: color-mix(in srgb, var(--pet-accent) 78%, transparent);
+  border: 1px solid color-mix(in srgb, var(--pet-accent) 60%, transparent);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--pet-accent) 45%, transparent);
+  animation: focusPulse 2.4s ease-in-out infinite;
+}
+.focus-pill.is-paused {
+  animation: none;
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.22);
+  box-shadow: none;
+  color: rgba(255, 255, 255, 0.8);
+}
+@keyframes focusPulse {
+  0%, 100% { box-shadow: 0 0 10px color-mix(in srgb, var(--pet-accent) 38%, transparent); }
+  50%      { box-shadow: 0 0 18px color-mix(in srgb, var(--pet-accent) 62%, transparent); }
+}
 
 /* HUD：悬停展开，两列排布，不挡住脸 */
 .hud {
@@ -598,7 +636,8 @@ html, body, #root {
 
 .context-menu {
   position: fixed;
-  min-width: 168px;
+  width: 196px;
+  max-width: 196px;
   max-height: 486px;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -633,11 +672,22 @@ html, body, #root {
   transition: background 0.14s ease;
 }
 .menu-item:hover { background: rgba(255, 255, 255, 0.09); }
+/* 带子菜单的项要允许换行：.submenu 是内联展开的（窗口只有 268px，向右浮出必被裁），
+   但在 flex 行里它会被挤到右侧、把整份菜单撑到 400px 宽而溢出窗口。
+   让子菜单独占一行，箭头留在第一行末尾。 */
+.menu-item.has-submenu { flex-wrap: wrap; }
 .menu-item.has-submenu::after {
   content: '▸';
   margin-left: auto;
   font-size: 9px;
   opacity: 0.5;
+  order: 1;
+}
+.menu-item.has-submenu > .submenu {
+  flex: 0 0 100%;
+  order: 2;
+  width: 100%;
+  box-sizing: border-box;
 }
 .menu-separator {
   height: 1px;
@@ -650,6 +700,16 @@ html, body, #root {
   font-weight: 600;
   letter-spacing: 0.4px;
   color: rgba(255, 255, 255, 0.4);
+}
+/* 菜单底部的一行小结：读不出「今天积累了什么」的养成都只是数字 */
+.menu-foot {
+  margin-top: 4px;
+  padding: 6px 10px 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  font-size: 10px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.42);
+  white-space: normal;
 }
 /* 子菜单内联展开：窗口只有 268px 宽，向右浮出的面板必然被裁掉 */
 .submenu {

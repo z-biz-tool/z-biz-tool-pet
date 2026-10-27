@@ -4,6 +4,15 @@
 
 ## 能力清单（对应代码，非路线图）
 
+- **陪伴层（她自己的状态机）**：`src/renderer/pet/companion/` 里一个 `CompanionEngine`，每秒 `tick` 一次，
+  统一管所有「她主动做的事」—— 自言自语、需求表达（饿/困/脏/病/寂寞）、久坐与喝水提醒、时段问候、
+  好感里程碑、专注钟。台词分「通用池 + 六角色各自语癖」，同一句话她能换六种说法。
+  专注模式下入口直接 `return`，从机制上保证不打扰
+- **手势分层**：单击 = 摸头（1~2 下普通、3~5 下害羞、6 下起傲娇拒绝并冷却 4 秒）、**长按 480ms = 说话**
+  （松手结束）、拖拽 = 挣扎着被搬走（4 秒节流）、滚轮 = 立绘缩放 0.85~1.15（跨启动记住）。
+  单击原本直接开麦，随手点一下就会弹权限框或录半秒环境音就发出去 —— 最容易被误触的手势不该挂最重的功能
+- **专注钟**：右键起 25 / 50 分钟，倒计时常驻在名牌上（点它暂停），过半给一次鼓励，结束庆祝并计入当日统计。
+  菜单底部一行「今天 · 摸头 N 次 · 专注 M 分钟」，让陪伴有积累感
 - **萌宠窗口**：268×512 透明无边框、置顶显示且不抢前台焦点、可拖拽、支持点击穿透（`WS_EX_TRANSPARENT`）、
   位置跨启动持久化（`~/.z-bot/window_bounds.json`，退出/隐藏时同步补写一次）
 - **立绘看板娘**：6 个角色（茉白/夜汐/星璃/砚秋/棠青/音橘，源自「AI 娘化全家福」6 张立绘，
@@ -50,9 +59,14 @@ npm run dev                 # 只起前端（浏览器里看不到托盘/快捷�
 npm run typecheck           # 渲染层 tsc --noEmit
 npm run lint                # eslint（error 为门禁，react-hooks warning 暂不阻断）
 npm run port:status         # 端点台账：契约 78 项必须全部接通，否则退出码 1
+npm test                    # 渲染层单测 37 条（node --experimental-strip-types）
 npx tauri build --bundles nsis   # 出 Windows 安装包
-cd src-tauri && cargo test --lib # Rust 单测（88 条）
+cd src-tauri && cargo test --lib # Rust 单测（96 条）
 ```
+
+> `npm test` 直接跑 `tests/*.test.ts`，Node 的 ESM 解析不做扩展名补全 —— 所以
+> `companion/engine.ts` 里对 `lines.ts` 的引用是**带 `.ts` 后缀**的（对应 tsconfig 的
+> `allowImportingTsExtensions`）。其余源码仍按 Vite 习惯省略后缀。
 
 ## 技术栈
 

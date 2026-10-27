@@ -17,6 +17,8 @@ import {
   characterOf,
   getSkinById,
 } from './characters';
+import { CompanionEngine, DEFAULT_CFG, type CompanionSnapshot } from './companion/engine';
+import type { SceneCue } from './companion/lines';
 import {
   Emotion,
   PetStats as PetCoreStats,
@@ -59,6 +61,21 @@ const INTERRUPT_THRESHOLD = 30;
 
 // 录音硬上限：MediaRecorder 的分片全在内存里，按住不放不该无限录（02 §2.4）
 const MAX_RECORDING_MS = 30_000;
+
+// 手势分层的两个关键阈值。
+// 长按改成「说话」而不是单击，是因为单击原本就直接开麦：随手点她一下会弹权限框、
+// 或者录到半秒环境音就发出去 —— 桌面上最容易被误触的动作不该挂最重的功能。
+const LONG_PRESS_MS = 480;
+/** 按住超过这个位移就算拖拽，不再判定为点击 */
+const DRAG_SLOP = 6;
+/** 立绘缩放范围：小于 0.85 看不清表情，大于 1.15 会顶出窗口 */
+const SCALE_MIN = 0.85;
+const SCALE_MAX = 1.15;
+const SCALE_KEY = 'pet_scale';
+
+function clampScale(v: number): number {
+  return Math.min(SCALE_MAX, Math.max(SCALE_MIN, Math.round(v * 100) / 100));
+}
 
 // 成长阶段 ⇒ 立绘缩放。以前是「圆的直径 90→140」，现在换成整体缩放，
 // 幅度收窄到 0.94~1.00：放大会顶出窗口，缩小到 0.9 以下又像被丢远了。
@@ -142,6 +159,29 @@ function App() {
   const [currentEmotion, setCurrentEmotion] = useState<Emotion>('happy');
   const [showHUD, setShowHUD] = useState(false);
   const [micGuide, setMicGuide] = useState(false);
+
+  // ---------- 陪伴层 ----------
+  // 她主动说的话走独立通道，不塞进 lastMessage：AI 的回复要留在气泡里让人读，
+  // 她随口一句「喝口水」不该把上一条回答顶掉 —— 反过来，新话出口时旧回复要让位。
+  const [companionSay, setCompanionSay] = useState<{ text: string; nonce: number } | null>(null);
+  const [companionSnap, setCompanionSnap] = useState<CompanionSnapshot>({
+    mode: 'normal',
+    remainMs: 0,
+    totalMs: 0,
+    paused: false,
+    stat: { date: '', focusDone: 0, focusMinutes: 0, pets: 0 },
+  });
+  const [careMenuOpen, setCareMenuOpen] = useState(false);
+  const [companionMenuOpen, setCompanionMenuOpen] = useState(false);
+  const [companionCfg, setCompanionCfg] = useState({ ...DEFAULT_CFG });
+  const [petScale, setPetScale] = useState(() => {
+    const raw = Number(localStorage.getItem(SCALE_KEY));
+    return Number.isFinite(raw) && raw > 0 ? clampScale(raw) : 1;
+  });
+  const companionRef = useRef<CompanionEngine | null>(null);
+  const sayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const petScaleRef = useRef(petScale);
+  petScaleRef.current = petScale;
   const cursorDeltaRef = useRef({ dx: 0, dy: 0 });
   // 流式回复缓冲（T3.8）：main 只把 chunk 发给发起窗口，这里按 ref 判定归属
   const streamActiveRef = useRef(false);
@@ -211,6 +251,9 @@ function App() {
   const currentSkinRef = useRef<PetSkin>(CHARACTER_SKINS[0]);
   currentSkinRef.current = currentSkin;
   const persona = characterOf(currentSkin.id);
+  // 她自称用界面上的名字（用户可以在管理端改名），所以台词里的 {me} 走这个 ref
+  const petNameRef = useRef(DEFAULT_PET_NAME);
+  petNameRef.current = config.petName?.trim() || persona.name;
 
   // 场景和粒子状态
   const [currentScenery, setCurrentScenery] = useState({
@@ -263,6 +306,21 @@ function App() {
     startX: 0,
     startY: 0,
   });
+  // 一次按下的完整生命周期：按下 → (拖拽 | 长按说话 | 点击摸头) 三选一
+  const pressRef = useRef<{
+    downAt: number;
+    timer: ReturnType<typeof setTimeout> | null;
+    recording: boolean;
+    moved: boolean;
+    x: number;
+    y: number;
+  }>({ downAt: 0, timer: null, recording: false, moved: false, x: 0, y: 0 });
+  const lastStruggleAtRef = useRef(0);
+  /** 摸头失败提示的节流：0 表示还没提示过 */
+  const petErrorHintRef = useRef(0);
+  // 松手判定要在 window 上收口（拖拽时指针可能已经移出小窗），因此用 ref 转发，
+  // 避免把每次渲染新生成的闭包绑死在首次 effect 里。
+  const finishPressRef = useRef<(() => void) | null>(null);
   const statusRef = useRef<PetStatus>('idle');
   statusRef.current = status;
 
@@ -468,6 +526,11 @@ function App() {
   // 鼠标追踪改为消费主进程推送（T3.2）：渲染端不再有 100ms 轮询定时器
   const applyCursorDelta = useCallback((delta: { dx: number; dy: number }) => {
     cursorDeltaRef.current = delta;
+    // 光标真的动了才算「人在座位上」：主进程即使光标静止也会推 (0,0)，
+    // 不设阈值的话久坐计时会在人已经离开时继续累加，然后对着空房间提醒起身。
+    if (Math.abs(delta.dx) + Math.abs(delta.dy) > 2) {
+      companionRef.current?.noteActivity();
+    }
     if (statusRef.current !== 'idle') return;
     if (currentAnimRef.current !== 'idle' && currentAnimRef.current !== 'float') return;
     const { dx, dy } = delta;
@@ -882,15 +945,83 @@ function App() {
     });
   };
 
-  const handlePetClick = () => {
-    if (status === 'idle') {
-      startRecording();
-    } else if (status === 'recording') {
-      stopRecording();
-    } else if (status === 'speaking') {
-      handleInterrupt();
-    }
+  // ---------- 陪伴层：她说的话怎么落到界面上 ----------
+  /**
+   * 她开口说话。cue 决定这一句配什么表情、什么动作、停多久。
+   *
+   * 三条约定：
+   * - 新话出口时清掉上一条 AI 回复，否则旧回答会一直占着气泡，自言自语永远看不见；
+   * - 停留时长按字数算（3.5s + 每字 0.22s），短句一闪而过等于没说；
+   * - 情绪是**临时**的，不改 petStats，下一次 refreshStats 会按真实数值纠正回来。
+   */
+  const handleCompanionSay = useCallback((text: string, cue: SceneCue) => {
+    if (!text) return;
+    setLastMessage('');
+    setCompanionSay({ text, nonce: Date.now() });
+
+    if (cue.emotion) setCurrentEmotion(cue.emotion);
+    if (cue.anim) triggerAnimationRef.current?.(cue.anim, 'user');
+    if (cue.hearts) spawnHeartsRef.current?.();
+
+    if (sayTimerRef.current) clearTimeout(sayTimerRef.current);
+    const ms = cue.ms ?? Math.min(12_000, 3_500 + text.length * 220);
+    sayTimerRef.current = setTimeout(() => {
+      sayTimerRef.current = null;
+      setCompanionSay(null);
+      // 情绪跟着这句话走，说完退回「她真实的状态」——否则被摸一下之后会一直挂着害羞脸
+      setCurrentEmotion(resolveEmotion(petStatsRef.current));
+    }, ms);
+  }, []);
+
+  // ---------- 手势分层 ----------
+  // 单击 = 摸头（可连击）、长按 = 说话、拖拽 = 挣扎着被搬走、滚轮 = 缩放立绘。
+  // 原来的单击直接开麦，等于把最重的功能挂在最容易被误触的手势上。
+  const handlePointerDown = (e: React.PointerEvent) => {
+    if (e.button !== 0) return;
+    const p = pressRef.current;
+    p.downAt = Date.now();
+    p.recording = false;
+    p.moved = false;
+    p.x = e.screenX;
+    p.y = e.screenY;
+
+    dragStateRef.current = { dragging: true, startX: e.screenX, startY: e.screenY };
+
+    if (p.timer) clearTimeout(p.timer);
+    p.timer = setTimeout(() => {
+      p.timer = null;
+      // 按住不动才说话：松手即结束，和语音助手「按住说话」的心智一致
+      if (statusRef.current !== 'idle' && statusRef.current !== 'interrupted') return;
+      p.recording = true;
+      log('[Pet] 长按说话');
+      void startRecording();
+    }, LONG_PRESS_MS);
   };
+
+  const handlePointerUp = () => {
+    const p = pressRef.current;
+    if (p.timer) {
+      clearTimeout(p.timer);
+      p.timer = null;
+    }
+    if (p.recording) {
+      p.recording = false;
+      stopRecording();
+      return;
+    }
+    // 拖过就不算点：谁也不会想在挪窗之后被记一次摸头
+    if (p.moved) return;
+    if (Date.now() - p.downAt >= LONG_PRESS_MS) return;
+    if (statusRef.current !== 'idle') {
+      // 非 idle 时点她的语义保持原样：说话中是打断，录音中是结束（托盘/P 键起录时走这条）
+      if (statusRef.current === 'speaking') handleInterrupt();
+      else if (statusRef.current === 'recording') stopRecording();
+      return;
+    }
+    const result = companionRef.current?.poke();
+    if (result?.report) void handlePetActionRef.current?.('pet');
+  };
+  finishPressRef.current = handlePointerUp;
 
   const spawnHearts = useCallback(() => {
     setHearts([Date.now(), Date.now() + 100, Date.now() + 200]);
@@ -899,11 +1030,32 @@ function App() {
   // ref 转发：让早于本函数声明的闭包（handlePetAction）能调到最新实现
   spawnHeartsRef.current = spawnHearts;
 
-  const handleDoubleClick = () => {
-    if (status !== 'idle') return;
-    triggerAnimation('petted', 'user');
-    spawnHearts();
-    void handlePetAction('pet');
+  /** 滚轮缩放立绘：手势比菜单快，且不打断任何正在播的动画（只改 .char-look 的 scale） */
+  const handleWheel = (e: React.WheelEvent) => {
+    if (contextMenu.show) return;
+    const next = clampScale(petScaleRef.current - e.deltaY * 0.0012);
+    if (next === petScaleRef.current) return;
+    setPetScale(next);
+    localStorage.setItem(SCALE_KEY, String(next));
+  };
+
+  const focusMinutesOf = () => companionRef.current?.getConfig().focusMinutes ?? DEFAULT_CFG.focusMinutes;
+
+  const startFocus = (minutes?: number) => {
+    companionRef.current?.startFocus(minutes ?? focusMinutesOf());
+    setContextMenu((prev) => ({ ...prev, show: false }));
+    flashHint(`专注 ${minutes ?? focusMinutesOf()} 分钟 · 期间不打扰`, 3000);
+  };
+
+  const endFocus = () => {
+    companionRef.current?.stopFocus('user');
+    setContextMenu((prev) => ({ ...prev, show: false }));
+  };
+
+  /** 陪伴开关落盘在 localStorage（与场景设置同一套约定），不进 config.json */
+  const patchCompanionCfg = (patch: Partial<typeof DEFAULT_CFG>) => {
+    const next = companionRef.current?.updateConfig(patch) ?? { ...companionCfg, ...patch };
+    setCompanionCfg(next);
   };
 
   // 宠物互动动作：调用养成 IPC 后刷新状态与情绪
@@ -927,11 +1079,22 @@ function App() {
       const stats = await fn();
       if (stats) {
         setPetStats(stats as PetCoreStats);
-        setCurrentEmotion(resolveEmotion(stats as PetCoreStats));
+        // 抚摸的情绪由陪伴层按连击档位接管（害羞/傲娇），这里再覆盖一次会把它冲掉
+        if (action !== 'pet') setCurrentEmotion(resolveEmotion(stats as PetCoreStats));
       }
       if (action === 'play' || action === 'pet') spawnHeartsRef.current?.();
     } catch (error) {
       log('[Pet] 养成动作失败 (' + action + '): ' + errorMessage(error, '未知错误'));
+      // 摸头是最轻、最高频的互动：失败时如果每次都弹一条大字号 toast，
+      // 点十下就弹十次，陪伴感立刻变成故障感。只留日志 + 半分钟最多一句轻提示。
+      if (action === 'pet') {
+        const now = Date.now();
+        if (now - petErrorHintRef.current > 30_000) {
+          petErrorHintRef.current = now;
+          flashHint('摸到了，但养成系统没响应', 2200);
+        }
+        return;
+      }
       flashHint('互动失败：' + errorMessage(error, '主进程无响应'));
     }
   }, [flashHint]);
@@ -940,12 +1103,14 @@ function App() {
   const handleContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    // 268×512 的窗口放不下从点击点向下展开的整份菜单：先按菜单尺寸夹进视口
+    companionRef.current?.noteInteraction();
+    // 268×512 的窗放不下从点击点向下展开的整份菜单：先按菜单尺寸夹进视口。
+    // 菜单加了专注/照顾/陪伴设置三组后本来就接近满高，所以样式里配了滚动兜底。
     const { x, y } = clampMenuPosition(
       e.clientX,
       e.clientY,
       { width: window.innerWidth, height: window.innerHeight },
-      { width: 190, height: 470 }
+      { width: 196, height: 500 }
     );
     setContextMenu({ x, y, show: true });
   };
@@ -954,6 +1119,8 @@ function App() {
     setContextMenu((prev) => ({ ...prev, show: false }));
     setAnimMenuOpen(false);
     setSkinMenuOpen(false);
+    setCareMenuOpen(false);
+    setCompanionMenuOpen(false);
   };
 
   const handleAnimSelect = (anim: AnimationType) => {
@@ -976,32 +1143,97 @@ function App() {
   };
 
   // ---------- 拖拽移动 ----------
-  const handleMouseDown = (e: React.MouseEvent) => {
-    if (e.button !== 0) return;
-    dragStateRef.current = { dragging: true, startX: e.screenX, startY: e.screenY };
-  };
-
+  // 拖拽不是「搬运一个窗口」，是她被拎起来了：飘一下、扭两下，再被放下。
+  // 反应要节流到 4 秒一次 —— 否则一路拖过去她会像触电一样抖个不停。
   const handleMouseMove = useCallback((e: MouseEvent) => {
     if (!dragStateRef.current.dragging) return;
     const dx = e.screenX - dragStateRef.current.startX;
     const dy = e.screenY - dragStateRef.current.startY;
     dragStateRef.current.startX = e.screenX;
     dragStateRef.current.startY = e.screenY;
+
+    const p = pressRef.current;
+    if (!p.moved && Math.abs(e.screenX - p.x) + Math.abs(e.screenY - p.y) > DRAG_SLOP) {
+      p.moved = true;
+      // 已经确定是拖拽，就别再等长按说话了
+      if (p.timer) {
+        clearTimeout(p.timer);
+        p.timer = null;
+      }
+      const now = Date.now();
+      if (now - lastStruggleAtRef.current > 4000) {
+        lastStruggleAtRef.current = now;
+        triggerAnimationRef.current?.('wiggle', 'user');
+        setCurrentEmotion('tsundere');
+        companionRef.current?.noteInteraction();
+      }
+    }
+
     window.electronAPI?.movePetWindow(dx, dy);
   }, []);
 
   const handleMouseUp = useCallback(() => {
     if (!dragStateRef.current.dragging) return;
     dragStateRef.current.dragging = false;
-    window.electronAPI?.stickToEdge?.();
+    // 只有真的拖动过才贴边。单击现在是「摸头」，如果每次摸头都走一遍贴边判断，
+    // 站在左边缘但悬在半空中的她会被一下一下地拽到屏幕底部。
+    if (pressRef.current.moved) window.electronAPI?.stickToEdge?.();
   }, []);
+
+  // ---------- 陪伴引擎 ----------
+  // 引擎不依赖 React：它每秒被 tick 一次，需要什么就通过 getter 现取（读的都是 ref，
+  // 天然拿到最新值）。这样它也永远不会因为某次 re-render 而拿到过期闭包。
+  useEffect(() => {
+    const engine = new CompanionEngine({
+      say: handleCompanionSay,
+      getStatus: () => statusRef.current,
+      getStats: () => petStatsRef.current,
+      getCharacter: () => ({ id: currentSkinRef.current.id, name: petNameRef.current }),
+      flash: flashHint,
+    });
+    companionRef.current = engine;
+    setCompanionCfg(engine.getConfig());
+
+    // 启动问候：错开一点，别跟入场动画抢同一帧
+    engine.greetOnStart();
+
+    const timer = setInterval(() => {
+      engine.tick();
+      const snap = engine.getSnapshot();
+      // 只在「看得见的东西变了」时才 setState：否则每秒一次重渲染会把粒子层也带着跑
+      setCompanionSnap((prev) =>
+        prev.mode === snap.mode &&
+        prev.paused === snap.paused &&
+        Math.ceil(prev.remainMs / 1000) === Math.ceil(snap.remainMs / 1000) &&
+        prev.stat.pets === snap.stat.pets &&
+        prev.stat.focusDone === snap.stat.focusDone &&
+        prev.stat.focusMinutes === snap.stat.focusMinutes
+          ? prev
+          : snap
+      );
+    }, 1000);
+
+    return () => {
+      clearInterval(timer);
+      engine.dispose();
+      companionRef.current = null;
+      if (sayTimerRef.current) {
+        clearTimeout(sayTimerRef.current);
+        sayTimerRef.current = null;
+      }
+    };
+  }, [handleCompanionSay, flashHint]);
 
   useEffect(() => {
     window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
+    const onUp = () => {
+      handleMouseUp();
+      finishPressRef.current?.();
+    };
+    window.addEventListener('mouseup', onUp);
     return () => {
       window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('mouseup', onUp);
     };
   }, [handleMouseMove, handleMouseUp]);
 
@@ -1013,14 +1245,23 @@ function App() {
     return () => window.removeEventListener('click', handler);
   }, [contextMenu.show]);
 
+  // AI 的回复也要有保质期：不设的话上一轮回答会永远挂在气泡里，
+  // 她后来主动说的话就永远没机会出现在同一个位置 —— 看着像她不说话了。
+  useEffect(() => {
+    if (!lastMessage) return;
+    const t = setTimeout(() => setLastMessage(''), 45_000);
+    return () => clearTimeout(t);
+  }, [lastMessage]);
+
   // ---------- 气泡文案 ----------
-  // 一处收敛所有「现在在干什么」：优先回报 AI 的话，其次回报状态。
+  // 一处收敛「现在在干什么」，优先级从硬到软：
+  //   对话状态 > AI 的回复 > 她主动说的话 > 角色问候语
+  // 她主动说的话排在 AI 回复之前是因为 handleCompanionSay 会清空 lastMessage ——
+  // 新话出口，旧回答就该让位，否则气泡会一直卡在上一轮回答上不再变化。
   const showMessage = status === 'idle' && !!lastMessage;
-  const bubbleText = showMessage
-    ? lastMessage
-    : status === 'idle'
-      ? persona.greeting
-      : STATUS_TEXT[status];
+  const bubbleText = status !== 'idle'
+    ? STATUS_TEXT[status]
+    : lastMessage || companionSay?.text || persona.greeting;
 
   // 属性告急 ⇒ 露出快捷动作（和以前一样的触发条件）
   const needsCare =
@@ -1032,6 +1273,11 @@ function App() {
 
   const stageScale = STAGE_SCALE[petStats.stage] ?? 1;
   const displayName = config.petName?.trim() || persona.name;
+
+  // 专注钟：名牌上的那颗胶囊显示倒计时，点它暂停/继续
+  const focusing = companionSnap.mode === 'focus' && companionSnap.remainMs > 0;
+  const remainSec = Math.max(0, Math.ceil(companionSnap.remainMs / 1000));
+  const focusClock = `${String(Math.floor(remainSec / 60)).padStart(2, '0')}:${String(remainSec % 60).padStart(2, '0')}`;
 
   // 自定义变量只能按 CSSProperties 断言进 style：TS 的 CSSProperties 不认识 --x
   const rootStyle = {
@@ -1046,9 +1292,8 @@ function App() {
         petStats.isSick ? 'pet-sick' : ''
       }`}
       style={rootStyle}
-      onMouseDown={handleMouseDown}
-      onClick={handlePetClick}
-      onDoubleClick={handleDoubleClick}
+      onPointerDown={handlePointerDown}
+      onWheel={handleWheel}
       onContextMenu={handleContextMenu}
       onMouseEnter={() => setShowHUD(true)}
       onMouseLeave={() => setShowHUD(false)}
@@ -1076,7 +1321,9 @@ function App() {
         <div className="char-breathe">
           <div
             className="char-look"
-            style={{ transform: `translate(${cursorLean.x}px, ${cursorLean.y}px) scale(${stageScale})` }}
+            style={{
+              transform: `translate(${cursorLean.x}px, ${cursorLean.y}px) scale(${(stageScale * petScale).toFixed(3)})`,
+            }}
           >
             <img className="char-img" src={currentSkin.portrait} alt={persona.name} draggable={false} />
           </div>
@@ -1111,9 +1358,11 @@ function App() {
       {/* 对话气泡 */}
       {bubbleText && (
         <div
-          className={`bubble ${showMessage ? 'is-message' : ''} ${status === 'thinking' ? 'is-thinking' : ''}`}
+          className={`bubble ${showMessage ? 'is-message' : ''} ${
+            !showMessage && status === 'idle' && companionSay ? 'is-say' : ''
+          } ${status === 'thinking' ? 'is-thinking' : ''}`}
           title={showMessage ? lastMessage : undefined}
-          key={showMessage ? 'msg' : status}
+          key={showMessage ? 'msg' : companionSay ? `say-${companionSay.nonce}` : status}
         >
           {bubbleText}
           {status === 'thinking' && (
@@ -1156,7 +1405,12 @@ function App() {
       )}
 
       {/* 底部：快捷动作 / HUD / 名牌 */}
-      <div className="dock" onMouseDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
+      <div
+        className="dock"
+        onMouseDown={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
+      >
         {status === 'idle' && needsCare && (
           <div className="actions">
             {petStats.hunger < 60 && (
@@ -1177,7 +1431,7 @@ function App() {
           </div>
         )}
 
-        {showHUD && (
+        {showHUD && !contextMenu.show && (
           <div className="hud">
             <div className="hud-grid">
               {STAT_BARS.map(({ key, label, icon, color }) => {
@@ -1202,7 +1456,13 @@ function App() {
           </div>
         )}
 
-        <div className="plate" onClick={toggleMode} title="打开管理端">
+        <div
+          className="plate"
+          onClick={toggleMode}
+          onPointerDown={(e) => e.stopPropagation()}
+          onWheel={(e) => e.stopPropagation()}
+          title="打开管理端"
+        >
           {currentSkin.face ? (
             <img className="plate-face" src={currentSkin.face} alt={persona.name} draggable={false} />
           ) : (
@@ -1210,9 +1470,23 @@ function App() {
           )}
           <div className="plate-meta">
             <span className="plate-name">{displayName}</span>
-            <span className="plate-role">{persona.role}</span>
+            <span className="plate-role">{focusing ? `专注中 · ${focusClock}` : persona.role}</span>
           </div>
-          <span className="emotion-chip">{EMOTION_CONFIGS[currentEmotion].toneModifier}</span>
+          {focusing ? (
+            <button
+              className={`focus-pill ${companionSnap.paused ? 'is-paused' : ''}`}
+              aria-label={companionSnap.paused ? '继续专注' : '暂停专注'}
+              title={companionSnap.paused ? '继续专注' : '暂停专注'}
+              onClick={(e) => {
+                e.stopPropagation();
+                companionRef.current?.toggleFocusPause();
+              }}
+            >
+              {companionSnap.paused ? '▶' : '❚❚'}
+            </button>
+          ) : (
+            <span className="emotion-chip">{EMOTION_CONFIGS[currentEmotion].toneModifier}</span>
+          )}
           <button
             className="plate-gear"
             aria-label="管理端"
@@ -1236,17 +1510,73 @@ function App() {
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onClick={(e) => e.stopPropagation()}
           onMouseDown={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+          onWheel={(e) => e.stopPropagation()}
         >
           <div className="menu-item" onClick={captureAndAnalyzeScreen}>📸 截图分析</div>
+          <div
+            className="menu-item"
+            onClick={() => {
+              companionRef.current?.chat();
+              setContextMenu((prev) => ({ ...prev, show: false }));
+            }}
+          >
+            💬 陪我一会儿
+          </div>
+
           <div className="menu-separator" />
-          <div className="menu-section-label">宠物养成</div>
-          <div className="menu-item" onClick={() => { handlePetAction('feed'); setContextMenu({ ...contextMenu, show: false }); }}>🍖 喂食 (饱食+30)</div>
-          <div className="menu-item" onClick={() => { handlePetAction('play'); setContextMenu({ ...contextMenu, show: false }); }}>🎮 玩耍 (快乐+20)</div>
-          <div className="menu-item" onClick={() => { handlePetAction('wash'); setContextMenu({ ...contextMenu, show: false }); }}>🛁 洗澡 (清洁+40)</div>
-          <div className="menu-item" onClick={() => { handlePetAction('sleep'); setContextMenu({ ...contextMenu, show: false }); }}>💤 {petStats.isSleeping ? '起床' : '睡觉'}</div>
-          <div className="menu-item" onClick={() => { handlePetAction('medicine'); setContextMenu({ ...contextMenu, show: false }); }}>💊 治疗 (健康+30)</div>
-          <div className="menu-item" onClick={() => { handlePetAction('pet'); setContextMenu({ ...contextMenu, show: false }); }}>🤚 抚摸 (好感+1)</div>
+          <div className="menu-section-label">专注</div>
+          {focusing ? (
+            <>
+              <div
+                className="menu-item"
+                onClick={() => {
+                  companionRef.current?.toggleFocusPause();
+                  setContextMenu((prev) => ({ ...prev, show: false }));
+                }}
+              >
+                {companionSnap.paused ? '▶ 继续专注' : '❚❚ 暂停专注'} · {focusClock}
+              </div>
+              <div className="menu-item" onClick={endFocus}>⏹ 结束专注</div>
+            </>
+          ) : (
+            <>
+              <div className="menu-item" onClick={() => startFocus(25)}>⏱ 专注 25 分钟</div>
+              <div className="menu-item" onClick={() => startFocus(50)}>⏱ 专注 50 分钟</div>
+            </>
+          )}
+
           <div className="menu-separator" />
+          <div
+            className="menu-item has-submenu"
+            onMouseEnter={() => setCareMenuOpen(true)}
+            onMouseLeave={() => setCareMenuOpen(false)}
+          >
+            <span>🍖 照顾</span>
+            {careMenuOpen && (
+              <div className="submenu">
+                <div className="submenu-item" onClick={() => { handlePetAction('feed'); setContextMenu((prev) => ({ ...prev, show: false })); }}>
+                  🍖 喂食 <span className="role">饱食+30</span>
+                </div>
+                <div className="submenu-item" onClick={() => { handlePetAction('play'); setContextMenu((prev) => ({ ...prev, show: false })); }}>
+                  🎮 玩耍 <span className="role">快乐+20</span>
+                </div>
+                <div className="submenu-item" onClick={() => { handlePetAction('wash'); setContextMenu((prev) => ({ ...prev, show: false })); }}>
+                  🛁 洗澡 <span className="role">清洁+40</span>
+                </div>
+                <div className="submenu-item" onClick={() => { handlePetAction('sleep'); setContextMenu((prev) => ({ ...prev, show: false })); }}>
+                  💤 {petStats.isSleeping ? '叫醒' : '睡觉'}
+                </div>
+                <div className="submenu-item" onClick={() => { handlePetAction('medicine'); setContextMenu((prev) => ({ ...prev, show: false })); }}>
+                  💊 治疗 <span className="role">健康+30</span>
+                </div>
+                <div className="submenu-item" onClick={() => { handlePetAction('pet'); setContextMenu((prev) => ({ ...prev, show: false })); }}>
+                  🤚 抚摸 <span className="role">好感+1</span>
+                </div>
+              </div>
+            )}
+          </div>
+
           <div
             className="menu-item has-submenu"
             onMouseEnter={() => setSkinMenuOpen(true)}
@@ -1269,6 +1599,7 @@ function App() {
               </div>
             )}
           </div>
+
           <div
             className="menu-item has-submenu"
             onMouseEnter={() => setAnimMenuOpen(true)}
@@ -1285,8 +1616,66 @@ function App() {
               </div>
             )}
           </div>
+
+          <div
+            className="menu-item has-submenu"
+            onMouseEnter={() => setCompanionMenuOpen(true)}
+            onMouseLeave={() => setCompanionMenuOpen(false)}
+          >
+            <span>🔔 陪伴设置</span>
+            {companionMenuOpen && (
+              <div className="submenu">
+                <div
+                  className={`submenu-item ${companionCfg.idleChat ? 'active' : ''}`}
+                  onClick={() => patchCompanionCfg({ idleChat: !companionCfg.idleChat })}
+                >
+                  {companionCfg.idleChat ? '✓' : '　'} 自言自语
+                </div>
+                <div
+                  className={`submenu-item ${companionCfg.care ? 'active' : ''}`}
+                  onClick={() => patchCompanionCfg({ care: !companionCfg.care })}
+                >
+                  {companionCfg.care ? '✓' : '　'} 健康提醒
+                </div>
+                <div
+                  className={`submenu-item ${companionCfg.focusMinutes === 25 ? 'active' : ''}`}
+                  onClick={() => patchCompanionCfg({ focusMinutes: 25 })}
+                >
+                  {companionCfg.focusMinutes === 25 ? '✓' : '　'} 默认专注 25 分钟
+                </div>
+                <div
+                  className={`submenu-item ${companionCfg.focusMinutes === 50 ? 'active' : ''}`}
+                  onClick={() => patchCompanionCfg({ focusMinutes: 50 })}
+                >
+                  {companionCfg.focusMinutes === 50 ? '✓' : '　'} 默认专注 50 分钟
+                </div>
+                <div
+                  className="submenu-item"
+                  onClick={() => {
+                    setPetScale(1);
+                    localStorage.setItem(SCALE_KEY, '1');
+                    flashHint('立绘已恢复原大小', 2200);
+                  }}
+                >
+                  ⤢ 重置缩放 ({Math.round(petScale * 100)}%)
+                </div>
+              </div>
+            )}
+          </div>
+
           <div className="menu-separator" />
-          <div className="menu-item" onClick={() => { triggerAnimation('idle', 'user'); setContextMenu({ ...contextMenu, show: false }); }}>🏠 回到待机</div>
+          <div className="menu-item" onClick={() => { triggerAnimation('idle', 'user'); setContextMenu((prev) => ({ ...prev, show: false })); }}>
+            🏠 回到待机
+          </div>
+          <div className="menu-item" onClick={() => { toggleMode(); setContextMenu((prev) => ({ ...prev, show: false })); }}>
+            ⚙ 打开管理端
+          </div>
+
+          {/* 今日互动小结：让「陪伴」有积累感，而不是每次都是全新的一天 */}
+          <div className="menu-foot">
+            今天 · 摸头 {companionSnap.stat.pets} 次 · 专注 {companionSnap.stat.focusMinutes} 分钟
+            {companionSnap.stat.focusDone > 0 ? `（${companionSnap.stat.focusDone} 次）` : ''}
+          </div>
         </div>
       )}
 
