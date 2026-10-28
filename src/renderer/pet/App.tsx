@@ -30,6 +30,7 @@ import {
   playLevelUp,
   playPing,
 } from './sound';
+import { msPerChar, revealText } from './typewriter';
 import { PetSkin, getSkinCSSVariables } from '../shared/skins';
 import {
   CHARACTERS,
@@ -156,6 +157,44 @@ function withAlpha(hex: string, alpha: number): string {
   const n = parseInt(full, 16);
   if (Number.isNaN(n)) return `rgba(140, 140, 200, ${alpha})`;
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+}
+
+// 气泡打字机：她「说的话」逐字长出来，状态词（在听…/思考中）仍然瞬间出现 ——
+// 台词有打字过程才像在开口，状态词慢半拍只会被当成程序卡死。
+// 推进逻辑全在纯函数 typewriter.ts（注入时间即可测），这里只负责把
+// performance.now() 喂进去。文案或 retrigger 变化时在渲染期就切到新句开头
+// （React 官方的 render-phase state 调整），而不是等 effect —— 否则气泡会
+// 先闪一帧上一句（或整段全文）再跳回第一个字。
+function useTypewriter(text: string, retrigger?: unknown): string {
+  const [entry, setEntry] = useState(() => ({ text, retrigger, shown: revealText(text, 0) }));
+  if (entry.text !== text || entry.retrigger !== retrigger) {
+    setEntry({ text, retrigger, shown: revealText(text, 0) });
+  }
+
+  useEffect(() => {
+    // 短句（≤6 字）没有打字过程；系统要求「减少动态效果」时也直接出全
+    const reduced =
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (msPerChar(text) === 0 || reduced) {
+      setEntry((e) => (e.text === text ? { ...e, shown: text } : e));
+      return;
+    }
+
+    const start = performance.now();
+    let frame = 0;
+    const tick = () => {
+      const elapsed = performance.now() - start;
+      const shown = revealText(text, elapsed);
+      setEntry((e) => (e.text === text ? { ...e, shown } : e));
+      if (shown === text) return; // 出全了就停在这帧，不再空转
+      frame = requestAnimationFrame(tick);
+    };
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [text, retrigger]);
+
+  return entry.shown;
 }
 
 function App() {
@@ -1541,9 +1580,16 @@ function App() {
   // 她主动说的话排在 AI 回复之前是因为 handleCompanionSay 会清空 lastMessage ——
   // 新话出口，旧回答就该让位，否则气泡会一直卡在上一轮回答上不再变化。
   const showMessage = status === 'idle' && !!lastMessage;
-  const bubbleText = status !== 'idle'
-    ? STATUS_TEXT[status]
-    : lastMessage || companionSay?.text || persona.greeting;
+  // 打字机只吃「她说的话」。状态文案走 STATUS_TEXT 原样瞬间出 —— 那是系统状态，
+  // 慢半拍会被当成卡死。
+  // spokenText 刻意不跟着 status 走：录音/思考那几秒气泡被 STATUS_TEXT 占着，
+  // 但台词本身没变；若在这里一起清空，每次说完话切回 idle 都会把上一条
+  // 已经读过的回答重新打一遍。文案真变了（新回答/新台词）自然会触发重打。
+  // retrigger 用 companionSay.nonce：同一句话连说两遍，文案没变也要重打一次，
+  // 否则第二次出场是凭空整段蹦出来的。
+  const spokenText = lastMessage || companionSay?.text || persona.greeting;
+  const typedSpoken = useTypewriter(spokenText, companionSay?.nonce ?? 'msg');
+  const bubbleText = status !== 'idle' ? STATUS_TEXT[status] : typedSpoken;
 
   // 属性告急 ⇒ 露出快捷动作（和以前一样的触发条件）
   const needsCare =
