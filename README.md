@@ -96,12 +96,29 @@ npm run lint                # eslint（error 为门禁，react-hooks warning 暂
 npm run port:status         # 端点台账：契约 78 项必须全部接通，否则退出码 1
 npm test                    # 渲染层单测 37 条（node --experimental-strip-types）
 npx tauri build --bundles nsis   # 出 Windows 安装包
+npm run build:mac                # 出 macOS .app + .dmg（走 scripts/build-macos.sh）
 cd src-tauri && cargo test --lib # Rust 单测（96 条）
 ```
 
 > `npm test` 直接跑 `tests/*.test.ts`，Node 的 ESM 解析不做扩展名补全 —— 所以
 > `companion/engine.ts` 里对 `lines.ts` 的引用是**带 `.ts` 后缀**的（对应 tsconfig 的
 > `allowImportingTsExtensions`）。其余源码仍按 Vite 习惯省略后缀。
+
+### macOS 打包为什么要走 `npm run build:mac`
+
+`tauri build` 末尾会调用 tauri-bundler 生成的 `bundle_dmg.sh`（tauri-cli 2.12.4 仍未修），
+其中有两处在受限 shell 环境下会失败：
+
+1. `find_mount_dir` 用 `grep -E "${dev_name}"` 把 `/dev/disk4s` 当正则。设备名恰好不含正则
+   元字符时 BSD grep 能容忍，但 toybox grep 会报 `bad regex ... brackets not balanced`，
+   找不到中间盘而中断。
+2. 用 AppleScript 美化 Finder 窗口。在无法控制 Finder 的环境里报
+   `A privilege violation occurred (-10004)`。
+
+两处都只影响 DMG 外壳，不影响 `.app` 内容。本项目 `tauri.conf.json` 没配置任何 dmg 布局
+（无背景图、无图标定位），所以 `--skip-jenkins` 跳过 Finder 美化不损失实质产物。
+`scripts/build-macos.sh` 先按正常方式构建，若 DMG 没出来再用干净 PATH + `--skip-jenkins`
+兜底 —— 在普通终端里走正常路径，在受限环境里走兜底，两边都能出包。
 
 ## 技术栈
 
