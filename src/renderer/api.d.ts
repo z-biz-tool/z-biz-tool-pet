@@ -160,7 +160,19 @@ interface ElectronApi {
   /** 她自己想干嘛。慢（可能几十秒），调用方应当是"发出去就忘掉" */
   mindBeat(state?: Record<string, unknown>): Promise<MindResult>;
   mindDiary(limit?: number): Promise<Array<{ id: string; content: string; at: string; source: string; importance: number }>>;
-  mindPing(): Promise<{ ok: boolean; model: string; baseUrl: string; latencyMs: number; reply?: string; error?: string; verdict?: string }>;
+  mindPing(): Promise<{
+    ok: boolean;
+    model: string;
+    baseUrl: string;
+    /** 实际用上的线协议：ollama | openai */
+    protocol?: string;
+    /** 地址看着像 ollama、探测后自动切到了 openai */
+    switched?: boolean;
+    latencyMs: number;
+    reply?: string;
+    error?: string;
+    verdict?: string;
+  }>;
   mindExtractNow(): Promise<{ ok: boolean; added?: number; error?: string }>;
   mindBusy(): Promise<boolean>;
 

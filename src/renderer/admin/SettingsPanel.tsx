@@ -99,6 +99,8 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose, onSave }) 
     reply?: string;
     verdict?: string;
     error?: string;
+    protocol?: string;
+    switched?: boolean;
   } | null>(null);
   const [probingMind, setProbingMind] = useState(false);
 
@@ -215,7 +217,10 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose, onSave }) 
       const config = await window.electronAPI?.loadConfig();
       void loadRuntimeOptions();
       if (config) {
-        form.setFieldsValue(config);
+        // 用默认值垫底：后端每加一个配置项，老用户磁盘上的 config.json 就少一个键，
+        // 直接 setFieldsValue 会让那个下拉框显示成空白（既不是"未设置"也不是某个选项）。
+        // 这里垫一次底，以后新增字段不用再改这个文件。
+        form.setFieldsValue({ ...DEFAULT_CONFIG, ...config });
         setProviders(config.providers || []);
         setCurrentProviderId(config.aiProvider || 'ollama');
         // 加载当前提供商的模型列表
@@ -770,16 +775,29 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose, onSave }) 
               <Form.Item
                 label="心智模型地址"
                 name="mindUrl"
-                extra="留空就用上面选中的提供商。填局域网机器的地址，可以让聊天和杂活分开跑，互不抢显存"
+                extra="留空就用上面选中的提供商。填 Ollama，或任何 OpenAI 兼容端点（llama.cpp / vLLM / LM Studio）都行，不用自己判断是哪一家"
               >
-                <Input placeholder="http://192.168.31.249:11434" allowClear />
+                <Input placeholder="http://192.168.31.249:52741/v1" allowClear />
+              </Form.Item>
+              <Form.Item
+                label="协议"
+                name="mindProtocol"
+                extra="自动识别第一次请求会多试一条路，之后就记住了。只有识别错了才需要手动指定"
+              >
+                <Select
+                  options={[
+                    { value: '', label: '自动识别（推荐）' },
+                    { value: 'ollama', label: 'Ollama（/api/chat）' },
+                    { value: 'openai', label: 'OpenAI 兼容（/v1/chat/completions）' },
+                  ]}
+                />
               </Form.Item>
               <Form.Item
                 label="心智模型"
                 name="mindModel"
-                extra="建议选一个常驻的小模型：每次换模型要重新加载权重，慢起来几十秒"
+                extra="填模型名即可；llama.cpp 这类单模型服务端可以留空。强烈建议让心智用一个常驻模型：每换一次模型就要重新加载权重，慢起来几十秒"
               >
-                <Input placeholder="qwen3:8b" allowClear />
+                <Input placeholder="qwen3:8b（llama.cpp 单模型可留空）" allowClear />
               </Form.Item>
               {mindProbe && (
                 <div
@@ -790,7 +808,9 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose, onSave }) 
                   }}
                 >
                   {mindProbe.ok
-                    ? `${mindProbe.verdict ?? '可用'} · ${mindProbe.latencyMs}ms · 回了「${mindProbe.reply ?? ''}」`
+                    ? `${mindProbe.verdict ?? '可用'} · ${mindProbe.latencyMs}ms · ${
+                        mindProbe.protocol === 'openai' ? 'OpenAI 兼容' : 'Ollama'
+                      }${mindProbe.switched ? '（自动识别）' : ''} · 回了「${mindProbe.reply ?? ''}」`
                     : `连不上：${mindProbe.error ?? '未知原因'}`}
                 </div>
               )}

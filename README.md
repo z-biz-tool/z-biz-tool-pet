@@ -25,6 +25,13 @@
   而不是每两分钟重复同一句台词。重要度 70+ 的会写进日记（`event` 类记忆）。
   模型不可用、超时、返回垃圾时**静默降级**到本地台词池，不弹任何错误：
   她"比平时安静一点"是允许的状态。
+  模型来源支持 **Ollama 与任何 OpenAI 兼容端点**（llama.cpp / vLLM / LM Studio）——
+  地址按 ollama 先试，404 就切 OpenAI 线协议并记住，用户不用知道自己填的是哪一家。
+  Ollama 侧靠 `think:false` + `keep_alive` 拿速度；OpenAI 侧靠
+  `chat_template_kwargs.enable_thinking=false`（思考型模板会把 200 token 预算全烧在
+  reasoning 上、正文为空）与 `response_format: json_schema` 做语法约束。
+  5xx 会带上可执行的结论（比如 Metal 后端显存不足会**卡死在错误态、必须重启**，
+  重试无效），而不是把一句 "Compute error" 原样甩给用户。
 
 - **陪伴层（她自己的状态机）**：`src/renderer/pet/companion/` 里一个 `CompanionEngine`，每秒 `tick` 一次，
   统一管所有「她主动做的事」—— 自言自语、需求表达（饿/困/脏/病/寂寞）、久坐与喝水提醒、时段问候、

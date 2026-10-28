@@ -29,9 +29,11 @@ interface PetConfig {
   shortcuts?: Record<string, string>;
   /** ---- 心智层（2026-10-28）：记忆抽取与自主内心的模型来源 ----
    *  mindUrl 留空 = 复用主对话 provider；填了就用这台机器跑杂活，省显存。 */
-  mindEnabled?: boolean;
-  mindUrl?: string;
-  mindModel?: string;
+   mindEnabled?: boolean;
+   mindUrl?: string;
+   /** '' = 自动识别 ollama / OpenAI 兼容；也可手动填 ollama | openai */
+   mindProtocol?: string;
+   mindModel?: string;
   mindIntervalSec?: number;
   autoExtractMemory?: boolean;
 }

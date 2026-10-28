@@ -45,6 +45,9 @@ pub fn default_config() -> Value {
         // mindUrl/mindModel 留空 = 复用主对话 provider，单模型用户不用填
         "mindEnabled": true,
         "mindUrl": "",
+        // 线协议："" = 自动识别（先按 ollama 试，404 换 OpenAI 兼容并记住）；
+        // 识别错的老服务端可以手动钉死
+        "mindProtocol": "",
         "mindModel": "",
         "mindIntervalSec": 120,
         "sceneryEnabled": true,

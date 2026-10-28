@@ -16,7 +16,9 @@
 //! 模型来源：`mindUrl` / `mindModel` 没填就复用主对话 provider。
 //! 这样单模型用户也能用，多模型用户（比如本机 ollama 跑 8b 做杂活）能省钱省显存。
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
@@ -61,7 +63,10 @@ fn extract_schema() -> Value {
                         "kind": { "type": "string", "enum": enum_of(&memory::KINDS) },
                         "key": { "type": "string" },
                         "content": { "type": "string" },
-                        "confidence": { "type": "integer" }
+                        // 区间必须写死：不写的话 llama.cpp 的 grammar 约束不住它，
+                        // 实测模型会返回 1（把 0~1 的习惯带过来），clamp_conf 只夹到
+                        // 1..=100 不会放大 —— 一条 confidence=1 的记忆在检索里等于不存在。
+                        "confidence": { "type": "integer", "minimum": 1, "maximum": 100 }
                     },
                     "required": ["kind", "key", "content", "confidence"]
                 }
@@ -186,8 +191,10 @@ fn provider(cfg: &Value) -> Provider {
     Provider {
         id: "mind".into(),
         name: "心智模型".into(),
-        // 自建地址按 ollama 处理：/api/chat 是最通用的本地推理协议，
-        // 而 openai 兼容端点也能在 ollama 上通过 /v1 暴露，反过来说不通。
+        // ptype 在这里只是"走不走直连"的开关，不是真协议 —— 具体说 ollama 的
+        // /api/chat 还是 OpenAI 的 /v1/chat/completions，由 normalize_base
+        // 加一次 404 探测决定（见 Wire 一节）。llama.cpp / vLLM / LM Studio
+        // 都能用，用户不用知道自己填的是哪一家。
         ptype: "ollama".into(),
         base_url: url,
         api_key: cfg_str(cfg, "mindApiKey"),
@@ -208,16 +215,17 @@ fn model_for(provider: &Provider, cfg: &Value) -> String {
 
 // ---------- 模型调用 ----------
 //
-// 心智层不走 ai::chat 的统一抽象，而是对 ollama 直连，原因有三条，都是实测出来的：
+// 心智层不走 ai::chat 的统一抽象，而是对本地推理服务直连，原因有三条，都是实测出来的：
 //
-// 1. **think:false**。"抽一条记忆""想一个念头"这种短任务，思考链是纯浪费。
-//    实测 qwen3:8b 回一句"在的"要 216 个 token（11s），关掉思考后 6 个 token（0.3s）。
-// 2. **keep_alive:30m**。本地机器同时只驻留一个模型，换模型代价是 25~90 秒的
+// 1. **关思考**。"抽一条记忆""想一个念头"这种短任务，思考链是纯浪费。
+//    实测 qwen3:8b 回一句"在的"要 216 个 token（11s），关掉思考后 6 个 token（0.3s）；
+//    llama.cpp 上更致命 —— 200 token 预算会全部变成英文 reasoning，正文是空的。
+// 2. **keep_alive / 常驻**。本地机器同时只驻留一个模型，换模型代价是 25~90 秒的
 //    加载（实测 load_duration 90441ms）。不钉住的话，两次内心活动之间模型会被
 //    换出去，下一次她"发呆"能发三分钟。
 // 3. **num_predict 上限**。不设上限，模型会在 JSON 后面继续解释。
 //
-// 非 ollama 的主 provider（openai/claude/…）仍然回落 ai::chat，功能不减。
+// 非本地的主 provider（openai/claude/…）仍然回落 ai::chat，功能不减。
 
 fn http() -> reqwest::Client {
     reqwest::Client::builder()
@@ -226,21 +234,133 @@ fn http() -> reqwest::Client {
         .unwrap_or_default()
 }
 
-async fn ollama_complete(
-    provider: &Provider,
-    model: &str,
-    system: &str,
-    user: &str,
+// ---------- 线协议 ----------
+//
+// 本地推理服务不是一家的。Ollama 说 `/api/chat`，llama.cpp / vLLM / LM Studio /
+// 各家代理说 OpenAI 的 `/v1/chat/completions`。只认 ollama 意味着用户填了
+// llama.cpp 地址就一直是"连不上"，而且**报错文案会误导他去查模型**。
+//
+// 所以：地址先归一，猜不出就先按 ollama 试，404 立刻换 OpenAI 线协议重发，
+// 结果缓存下来 —— 404 是这类服务端一致且秒回的应答（llama.cpp 实测 0.01s），
+// 比预检一个 /health 更可靠，也不用为探测多打一次往返。
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Wire {
+    Ollama,
+    Openai,
+}
+
+impl Wire {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Wire::Ollama => "ollama",
+            Wire::Openai => "openai",
+        }
+    }
+}
+
+/// 把用户填的地址归一成 (base, 协议线索)。
+///
+/// 长后缀必须先匹配：`/chat/completions` 是 `/v1/chat/completions` 的后缀，
+/// 顺序反了会把 `/v1` 留在 base 里，拼端点时变成 `/v1/v1/...`。
+pub fn normalize_base(raw: &str) -> (String, Wire) {
+    let u = raw.trim().trim_end_matches('/').to_string();
+    for (suffix, wire) in [
+        ("/v1/chat/completions", Wire::Openai),
+        ("/chat/completions", Wire::Openai),
+        ("/v1", Wire::Openai),
+        ("/api/chat", Wire::Ollama),
+        ("/api", Wire::Ollama),
+    ] {
+        if let Some(b) = u.strip_suffix(suffix) {
+            // OpenAI 系剥掉 /v1，端点拼接时再加回去
+            let b = if wire == Wire::Openai { b.trim_end_matches("/v1") } else { b };
+            return (b.to_string(), wire);
+        }
+    }
+    (u, Wire::Ollama)
+}
+
+fn wire_cache() -> &'static Mutex<HashMap<String, Wire>> {
+    static C: OnceLock<Mutex<HashMap<String, Wire>>> = OnceLock::new();
+    C.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// 探测结果缓存整个进程生命周期：一个地址的协议不会中途改口。
+/// 只拿锁拷贝一份出来就放开，绝不跨 await 持有（guard 不是 Send）。
+fn cached_wire(base: &str) -> Option<Wire> {
+    wire_cache().lock().ok().and_then(|m| m.get(base).copied())
+}
+
+fn remember_wire(base: &str, w: Wire) {
+    if let Ok(mut m) = wire_cache().lock() {
+        m.insert(base.to_string(), w);
+    }
+}
+
+/// 最终用哪条线。`mindProtocol` 是用户的手动覆盖，只对 mindUrl 生效 ——
+/// 复用主 provider 时不该被心智的设置污染。
+fn resolve_wire(cfg: &Value, base: &str, inferred: Wire) -> Wire {
+    if cfg_str(cfg, "mindUrl").is_empty() {
+        return inferred;
+    }
+    match cfg_str(cfg, "mindProtocol").to_ascii_lowercase().as_str() {
+        "ollama" => Wire::Ollama,
+        "openai" | "openai-compatible" | "openai_compatible" => Wire::Openai,
+        _ => cached_wire(base).unwrap_or(inferred),
+    }
+}
+
+/// 404 是"这条路根本不通"，和"这条路通但东西不对"必须分开：
+/// 前者要换协议，后者要原样报错，混为一谈会让协议探测吃掉真正的错误信息。
+struct CallError {
+    msg: String,
+    not_found: bool,
+}
+
+async fn post_chat(endpoint: &str, body: &Value, budget: Duration) -> Result<(u16, String), String> {
+    let call = http().post(endpoint).header("Content-Type", "application/json").json(body).send();
+    let resp = match tokio::time::timeout(budget, call).await {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => return Err(format!("心智模型连不上（{endpoint}）：{e}")),
+        Err(_) => return Err(format!("心智模型 {}s 内没有响应", budget.as_secs())),
+    };
+    let code = resp.status().as_u16();
+    let text = resp.text().await.unwrap_or_default();
+    Ok((code, text))
+}
+
+/// 两条线（ollama / OpenAI 兼容）共用同一套 5xx 诊断，避免"换个地址就换一种报错"。
+fn http_error(code: u16, text: &str) -> String {
+    if code >= 500 {
+        return format!("心智模型 {code}{}：{}", hint_for_5xx(code), head(text, 160));
+    }
+    format!("心智模型 {code}：{}", head(text, 160))
+}
+
+/// 一次心智推理的全部入参。
+///
+/// 用结构体而不是八九个位置参数：`temperature` 和 `max_tokens` 都是数字、紧挨着，
+/// 调换顺序编译器一声不吭，只会在运行时静默地用错采样参数 —— 这种 bug
+/// 表现为"模型突然变笨"，查起来极其费劲。
+struct Req<'a> {
+    base: &'a str,
+    model: &'a str,
+    system: &'a str,
+    user: &'a str,
     budget: Duration,
     temperature: f64,
     max_tokens: i64,
-    schema: Option<&Value>,
-) -> Result<String, String> {
+    schema: Option<&'a Value>,
+}
+
+async fn ollama_complete(r: &Req<'_>) -> Result<String, CallError> {
+    let endpoint = format!("{}/api/chat", r.base);
     let mut body = serde_json::json!({
-        "model": model,
+        "model": r.model,
         "messages": [
-            { "role": "system", "content": system },
-            { "role": "user", "content": user },
+            { "role": "system", "content": r.system },
+            { "role": "user", "content": r.user },
         ],
         "stream": false,
         // 关闭思考链：抽一条记忆、想一个念头这种短任务，思考是纯浪费。
@@ -249,43 +369,149 @@ async fn ollama_complete(
         // 钉住模型：本地机同时只驻留一个模型，换模型的加载代价是 20~90 秒。
         "keep_alive": "30m",
         "options": {
-            "temperature": temperature,
-            "num_predict": max_tokens,
+            "temperature": r.temperature,
+            "num_predict": r.max_tokens,
             "top_p": 0.9,
         },
     });
     // 结构化输出：把 JSON Schema 交给 ollama 做语法约束，模型就**不可能**
     // 输出非法 JSON，也不会把推理过程混进正文（实测 qwen3:30b-a3b 会这么做，
     // 提示词里写十遍"只输出 JSON"都拦不住）。
-    if let Some(schema) = schema {
+    if let Some(schema) = r.schema {
         body["format"] = schema.clone();
     }
 
-    let call = http()
-        .post(format!("{}/api/chat", provider.base_url))
-        .header("Content-Type", "application/json")
-        .json(&body)
-        .send();
-
-    let resp = match tokio::time::timeout(budget, call).await {
-        Ok(Ok(r)) => r,
-        Ok(Err(e)) => return Err(format!("心智模型连不上（{}）：{e}", provider.base_url)),
-        Err(_) => return Err(format!("心智模型 {}s 内没有响应", budget.as_secs())),
-    };
-
-    if !resp.status().is_success() {
-        let code = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        return Err(format!("心智模型 {}：{}", code, head(&text, 160)));
+    let (code, text) = post_chat(&endpoint, &body, r.budget)
+        .await
+        .map_err(|e| CallError { msg: e, not_found: false })?;
+    if !(200..300).contains(&code) {
+        return Err(CallError { msg: http_error(code, &text), not_found: code == 404 });
     }
-
-    let data: Value = resp.json().await.map_err(|e| e.to_string())?;
+    let data: Value = serde_json::from_str(&text).map_err(|e| CallError {
+        msg: format!("心智模型返回的不是 JSON（{e}）：{}", head(&text, 160)),
+        not_found: false,
+    })?;
     Ok(data
         .get("message")
         .and_then(|m| m.get("content"))
         .and_then(|c| c.as_str())
         .unwrap_or("")
         .to_string())
+}
+
+/// OpenAI 兼容线：llama.cpp / vLLM / LM Studio / 各种代理都走这条。
+async fn openai_complete(r: &Req<'_>) -> Result<String, String> {
+    let endpoint = if r.base.ends_with("/v1") {
+        format!("{}/chat/completions", r.base)
+    } else {
+        format!("{}/v1/chat/completions", r.base)
+    };
+
+    let mut body = serde_json::json!({
+        "messages": [
+            { "role": "system", "content": r.system },
+            { "role": "user", "content": r.user },
+        ],
+        "stream": false,
+        "temperature": r.temperature,
+        "max_tokens": r.max_tokens,
+        // 思考型模板（llama.cpp --jinja + Qwen3 系）默认开思考，200 个 token 的预算
+        // 会全部变成英文 reasoning_content、content 是空的。实测带上这个参数后
+        // 同一个请求 1.7s 出合法 JSON。不认识这个字段的服务端一般直接忽略。
+        "chat_template_kwargs": { "enable_thinking": false },
+    });
+    // model 可以不给：llama.cpp 单模型时无所谓填什么，而用户常常不知道该填
+    // 全路径还是短名。留空就别发这个字段，比填一个错的强。
+    if !r.model.is_empty() {
+        body["model"] = Value::String(r.model.into());
+    }
+    if let Some(schema) = r.schema {
+        body["response_format"] = serde_json::json!({
+            "type": "json_schema",
+            // strict 不敢开 true：llama.cpp 的 grammar 生成器对嵌套数组 + enum
+            // 的支持是够用的，但 strict 会再叠一层逐字段校验，老版本直接 400。
+            "json_schema": { "name": "mind", "strict": false, "schema": schema },
+        });
+    }
+
+    let (code, text) = post_chat(&endpoint, &body, r.budget).await?;
+
+    // 老版 llama.cpp / 部分代理不认识 response_format，会 400/422。
+    // 剥掉再发一次：模型在提示词 + extract_json 的配合下仍能产出可用 JSON
+    //（实测去掉后照样是合法 JSON），只是少了语法级保证。
+    if matches!(code, 400 | 422) {
+        if let Some(obj) = body.as_object_mut() {
+            if obj.remove("response_format").is_some() {
+                let (c2, t2) = post_chat(&endpoint, &body, r.budget).await?;
+                return parse_openai(c2, &t2);
+            }
+        }
+    }
+    parse_openai(code, &text)
+}
+
+/// 服务端 5xx 常常只有一句 "Compute error"，用户看了完全不知道该怎么办。
+/// 实测过一整轮：Metal 后端一旦显存不足就会进入错误态，**而且不会自愈**，
+/// 后续所有请求（哪怕只要 16 个 token）都在 0.02 秒内秒回同一个 500。
+/// 这种情况只能重启那台机器上的推理服务，重试和改配置都没用。
+/// 所以错误文案要直接把结论说出来，别让用户去猜。
+fn hint_for_5xx(code: u16) -> &'static str {
+    match code {
+        500 => "（服务端算力/显存不足，且已进入错误态——需要重启那台机器上的推理服务，重试无效）",
+        502..=504 => "（上游推理服务没起来或正在重启，稍等再试）",
+        _ => "（服务端内部错误）",
+    }
+}
+
+fn parse_openai(code: u16, text: &str) -> Result<String, String> {
+    if !(200..300).contains(&code) {
+        return Err(http_error(code, text));
+    }
+    let data: Value =
+        serde_json::from_str(text).map_err(|e| format!("心智模型返回的不是 JSON（{e}）：{}", head(text, 160)))?;
+    let msg = data.pointer("/choices/0/message").cloned().unwrap_or(Value::Null);
+    let content = msg.get("content").and_then(|c| c.as_str()).unwrap_or("").trim().to_string();
+    if !content.is_empty() {
+        return Ok(content);
+    }
+    // content 空但 reasoning 非空 = 思考模型把预算烧光了。这条错误要能直接指出
+    // 该怎么改，不然用户只会看到"她不理我"。
+    let reasoned = msg
+        .get("reasoning_content")
+        .and_then(|r| r.as_str())
+        .is_some_and(|s| !s.is_empty());
+    if reasoned {
+        return Err(
+            "模型在思考里把 token 烧光了，正文是空的。llama.cpp 需要 chat_template_kwargs.enable_thinking=false（本客户端已自动带上），或把 num_predict 调大"
+                .into(),
+        );
+    }
+    Err("心智模型返回了空内容".into())
+}
+
+async fn chat_complete(r: &Req<'_>, wire: Wire) -> Result<String, String> {
+    match wire {
+        // 404 = 这个地址根本不是 ollama。llama.cpp / vLLM / LM Studio
+        // 对 /api/chat 一致地秒回 404（实测 0.01s），是干净的探测信号。
+        Wire::Ollama => match ollama_complete(r).await {
+            Err(CallError { not_found: true, .. }) => {
+                remember_wire(r.base, Wire::Openai);
+                openai_complete(r).await
+            }
+            Err(e) => Err(e.msg),
+            Ok(s) => {
+                remember_wire(r.base, Wire::Ollama);
+                Ok(s)
+            }
+        },
+        Wire::Openai => {
+            let out = openai_complete(r).await;
+            if out.is_ok() {
+                remember_wire(r.base, Wire::Openai);
+            }
+            out
+        }
+    }
 }
 
 async fn complete(
@@ -299,13 +525,16 @@ async fn complete(
 ) -> Result<String, String> {
     let p = provider(cfg);
     let model = model_for(&p, cfg);
-    if model.is_empty() {
-        return Err("没有可用的心智模型，请先在设置里选一个".into());
-    }
 
     if p.ptype == "ollama" {
-        return ollama_complete(&p, &model, system, user, budget, temperature, max_tokens, schema)
-            .await;
+        let (base, inferred) = normalize_base(&p.base_url);
+        let wire = resolve_wire(cfg, &base, inferred);
+        // ollama 必须有模型名；OpenAI 兼容端可以不给（单模型服务端无所谓填什么）
+        if model.is_empty() && wire == Wire::Ollama {
+            return Err("没有可用的心智模型，请先在设置里选一个".into());
+        }
+        let req = Req { base: &base, model: &model, system, user, budget, temperature, max_tokens, schema };
+        return chat_complete(&req, wire).await;
     }
 
     let req = ChatRequest {
@@ -940,22 +1169,38 @@ pub async fn mind_ping() -> Value {
     let cfg = state::load_config();
     let p = provider(&cfg);
     let model = model_for(&p, &cfg);
+    let (base, inferred) = normalize_base(&p.base_url);
+    let guessed = if p.ptype == "ollama" { resolve_wire(&cfg, &base, inferred) } else { inferred };
     let started = Instant::now();
     let probe = complete(&cfg, "只回复两个字：在的", "在吗", Duration::from_secs(15), 0.2, 24, None).await;
     let ms = started.elapsed().as_millis() as u64;
+    // 探测后实际用的协议（第一次调用可能已经从 ollama 翻到 openai 了）
+    let used = cached_wire(&base).map(|w| w.as_str().to_string());
+    let protocol = used.unwrap_or_else(|| guessed.as_str().to_string());
+    let switched = guessed == Wire::Ollama && protocol == "openai";
     match probe {
         Ok(text) => json!({
             "ok": true,
             "model": model,
             "baseUrl": p.base_url,
+            "protocol": protocol,
+            "switched": switched,
             "latencyMs": ms,
             "reply": head(text.trim(), 40),
-            "verdict": if ms > 8000 { "太慢了，内心活动会看起来像卡住" } else { "可用" },
+            "verdict": if ms > 8000 {
+                "太慢了，内心活动会看起来像卡住。本地机只驻留一个模型时最容易撞上换模型，建议让心智用一个常驻的小模型"
+            } else if ms > 3000 {
+                "可用，但不够利索"
+            } else {
+                "可用"
+            },
         }),
         Err(e) => json!({
             "ok": false,
             "model": model,
             "baseUrl": p.base_url,
+            "protocol": protocol,
+            "switched": switched,
             "latencyMs": ms,
             "error": e,
         }),
@@ -1014,6 +1259,81 @@ mod tests {
     }
 
     #[test]
+    fn normalize_base_hands_out_protocol_and_base() {
+        // 用户会把端点整条粘进去，也只填个 host —— 两种都得能用
+        assert_eq!(normalize_base("http://x:11434"), ("http://x:11434".into(), Wire::Ollama));
+        assert_eq!(normalize_base("http://x:11434/api"), ("http://x:11434".into(), Wire::Ollama));
+        assert_eq!(normalize_base("http://x:11434/api/chat"), ("http://x:11434".into(), Wire::Ollama));
+        assert_eq!(normalize_base("http://x:52741/v1"), ("http://x:52741".into(), Wire::Openai));
+        assert_eq!(
+            normalize_base("http://x:52741/v1/chat/completions"),
+            ("http://x:52741".into(), Wire::Openai)
+        );
+        assert_eq!(
+            normalize_base("http://x:8000/v1/"),
+            ("http://x:8000".into(), Wire::Openai)
+        );
+        assert_eq!(
+            normalize_base("  http://x:8000/openai/v1/chat/completions "),
+            ("http://x:8000/openai".into(), Wire::Openai)
+        );
+        assert_eq!(normalize_base(" https://api.x.com "), ("https://api.x.com".into(), Wire::Ollama));
+    }
+
+    #[test]
+    fn openai_base_rejoins_v1_so_the_endpoint_is_not_double_prefixed() {
+        let (base, wire) = normalize_base("http://x:52741/v1/chat/completions");
+        assert_eq!(wire, Wire::Openai);
+        // 端点拼接要求 base 不带 /v1，否则会变成 /v1/v1/chat/completions
+        let endpoint = if base.ends_with("/v1") {
+            format!("{base}/chat/completions")
+        } else {
+            format!("{base}/v1/chat/completions")
+        };
+        assert_eq!(endpoint, "http://x:52741/v1/chat/completions");
+    }
+
+    #[test]
+    fn manual_protocol_override_beats_guess_but_only_for_the_mind_endpoint() {
+        let own = json!({"mindUrl": "http://x:11434", "mindProtocol": "openai"});
+        assert_eq!(resolve_wire(&own, "http://x:11434", Wire::Ollama), Wire::Openai);
+
+        let own = json!({"mindUrl": "http://x:52741", "mindProtocol": "ollama"});
+        assert_eq!(resolve_wire(&own, "http://x:52741", Wire::Openai), Wire::Ollama);
+
+        // mindUrl 留空 = 复用主 provider：这时心智的协议设置不许插手，
+        // 否则用户只想给自建端点指定协议，却把主对话的 ollama 也带偏了。
+        let reuse = json!({"mindUrl": "", "mindProtocol": "openai", "ollamaUrl": "http://x:11434"});
+        assert_eq!(resolve_wire(&reuse, "http://x:11434", Wire::Ollama), Wire::Ollama);
+    }
+
+    #[test]
+    fn detected_wire_wins_over_the_guess_once_cached() {
+        remember_wire("http://x:9999", Wire::Openai);
+        let cfg = json!({"mindUrl": "http://x:9999", "mindProtocol": "auto"});
+        // 地址长得像 ollama（没 /v1），但探测已经证明它是 OpenAI 兼容端
+        assert_eq!(resolve_wire(&cfg, "http://x:9999", Wire::Ollama), Wire::Openai);
+    }
+
+    #[test]
+    fn server_side_failures_tell_the_user_what_to_do() {
+        // "Compute error" 原样抛给用户等于什么都没说。实测 Metal 后端显存不足后
+        // 会卡死在错误态，所有请求 0.02s 秒回 500 —— 重试、改配置都没用。
+        let e500 = http_error(500, "{\"error\":{\"message\":\"Compute error.\"}}");
+        assert!(e500.contains("重启"), "500 必须指出重启那台机器的服务：{e500}");
+        assert!(e500.contains("重试无效"), "必须打消重试的念头：{e500}");
+        assert!(e500.contains("Compute error"), "原始信息要保留：{e500}");
+
+        let e503 = http_error(503, "upstream down");
+        assert!(e503.contains("稍等再试"), "503 是可以等的：{e503}");
+
+        // 4xx 是用户能自己修的，不该套上"重启服务"这种误导性建议
+        let e404 = http_error(404, "File Not Found");
+        assert!(!e404.contains("重启"));
+        assert!(e404.contains("404"));
+    }
+
+    #[test]
     fn extraction_ticks_every_other_turn() {
         // 计数器是全局的，只验证节奏而不是绝对值
         let mut hits = 0;
@@ -1025,14 +1345,23 @@ mod tests {
         assert_eq!(hits, 3);
     }
 
-    /// 真机联调：对着一台跑 ollama 的机器跑通两条链路。
+    /// 真机联调：对着一台跑本地推理的机器跑通两条链路。
     ///
+    /// Ollama（/api/chat）：
     ///     ZBOT_MIND_URL=http://192.168.31.249:11434 ZBOT_MIND_MODEL=qwen3:8b \
+    ///       cargo test --lib mind_live -- --ignored --nocapture
+    ///
+    /// OpenAI 兼容（llama.cpp / vLLM / LM Studio）：
+    ///     ZBOT_MIND_URL=http://192.168.31.249:52741/v1 ZBOT_MIND_MODEL=local_model \
     ///       cargo test --lib mind_live -- --ignored --nocapture
     ///
     /// 标 ignore 是因为它依赖局域网里那台机器；CI 上跑必然红。
     /// 但它值得留着 —— 提示词改一句就可能让模型不再输出合法 JSON，
     /// 而单测只能验证"解析器能吃下什么样的字符串"，验证不了"模型会不会给"。
+    ///
+    /// ⚠️ 32GB 的机器上别同时驻留两个大模型：llama.cpp 显存不足时 Metal 后端会
+    /// **进入错误态且不自愈**，之后每个请求 0.02s 秒回 500 "Compute error"，
+    /// 只能重启那个服务。跑这个测试前先确认 ollama 里没有几十 GB 的模型在驻留。
     #[tokio::test]
     #[ignore = "需要局域网内跑着 ollama 的机器"]
     async fn mind_live_extract_and_reflect() {

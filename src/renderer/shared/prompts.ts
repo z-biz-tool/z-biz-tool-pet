@@ -46,6 +46,8 @@ export const DEFAULT_CONFIG = {
   // 120 秒是"她明显在活动"和"她太吵"之间的手感值。
   mindEnabled: true,
   mindUrl: '',
+  /** '' = 自动识别；ollama | openai 手动指定 */
+  mindProtocol: '',
   mindModel: '',
   mindIntervalSec: 120,
   autoExtractMemory: true,
