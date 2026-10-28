@@ -4,11 +4,32 @@ import {
   ANIMATION_KEYFRAMES,
   ANIMATIONS,
   ANIMATION_MENU_ITEMS,
-  getRandomIdleAnimation,
+  pickIdleAnimation,
   getRandomIdleInterval,
   canInterruptAnimation,
   getAnimationCSS,
 } from './animations';
+import {
+  DEFAULT_PHYSICS,
+  RELEASE_WINDOW_MS,
+  makeThrowBody,
+  stepPhysics,
+  estimateReleaseVelocity,
+  shouldThrow,
+  type ThrowBody,
+  type Rect,
+  type Vec,
+} from './physics';
+import {
+  resumeUnlock as resumeAudio,
+  setMuted as setSoundMuted,
+  playLand,
+  playBump,
+  playPet,
+  playThrow,
+  playLevelUp,
+  playPing,
+} from './sound';
 import { PetSkin, getSkinCSSVariables } from '../shared/skins';
 import {
   CHARACTERS,
@@ -312,10 +333,17 @@ function App() {
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const recordCapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const dragStateRef = useRef<{ dragging: boolean; startX: number; startY: number }>({
+  const dragStateRef = useRef<{
+    dragging: boolean;
+    startX: number;
+    startY: number;
+    /** 拖拽过程中的指针采样，用来在松手瞬间估出「甩出去」的速度 */
+    samples: { x: number; y: number; t: number }[];
+  }>({
     dragging: false,
     startX: 0,
     startY: 0,
+    samples: [],
   });
   // 一次按下的完整生命周期：按下 → (拖拽 | 长按说话 | 点击摸头) 三选一
   const pressRef = useRef<{
@@ -353,6 +381,141 @@ function App() {
   // 光标跟随功能本身**没有丢**：已改为主进程推送（T3.2 的 applyCursorDelta）。
   const currentAnimRef = useRef<AnimationType>('idle');
   currentAnimRef.current = currentAnimation;
+
+  // 抛掷物理：飞行中的状态放在 ref 里，rAF 回调永远读得到最新值，
+  // 也不需要为它触发任何 re-render（位置是窗口属性，不是 React 状态）。
+  const physicsRef = useRef<{
+    body: ThrowBody | null;
+    area: Rect | null;
+    size: { width: number; height: number } | null;
+    lastAt: number;
+    frame: number | null;
+    lastLandedAt: number;
+  }>({ body: null, area: null, size: null, lastAt: 0, frame: null, lastLandedAt: 0 });
+  /** 音效开关：与粒子开关分开，因为「静音」和「不想看飘落物」是两种诉求 */
+  const [soundOn, setSoundOn] = useState(() => localStorage.getItem('pet_sound') !== '0');
+  const soundOnRef = useRef(soundOn);
+  soundOnRef.current = soundOn;
+  useEffect(() => {
+    setSoundMuted(!soundOn);
+    localStorage.setItem('pet_sound', soundOn ? '1' : '0');
+  }, [soundOn]);
+
+  /** 掉出屏幕太多时把自己拉回来（多屏切换/分辨率变化后窗口可能落在不可见区域） */
+  const recoverIfLost = useCallback(async () => {
+    const api = window.electronAPI;
+    const b = await api?.getMotionBounds?.().catch(() => null);
+    if (!b) return false;
+    const area: Rect = { x: b.areaX, y: b.areaY, width: b.areaW, height: b.areaH };
+    const visW = Math.max(0, Math.min(b.winX + b.winW, area.x + area.width) - Math.max(b.winX, area.x));
+    const visH = Math.max(0, Math.min(b.winY + b.winH, area.y + area.height) - Math.max(b.winY, area.y));
+    // 超过 25% 不可见才拉：贴边站住是正常姿态，不该被当成掉落
+    if (visW * visH >= b.winW * b.winH * 0.75) return false;
+    const p = await api?.recoverPetPosition?.().catch(() => null);
+    if (p) {
+      log(`[Pet] 检测到窗口不可见，已拉回 (${p.x}, ${p.y})`);
+      flashHint('刚才跑到屏幕外了，我回来了', 3000);
+      playLand(0.5);
+    }
+    return !!p;
+  }, [flashHint]);
+
+  /** 结束这一轮物理：清 rAF、清状态 */
+  const stopPhysics = useCallback(() => {
+    const p = physicsRef.current;
+    if (p.frame != null) cancelAnimationFrame(p.frame);
+    p.frame = null;
+    p.body = null;
+    p.lastAt = 0;
+  }, []);
+
+  /**
+   * 抛出：从当前窗口位置 + 释放速度开始积分。
+   *
+   * 关键取舍 —— 整段飞行只在开始时取一次工作区（一次 IPC），之后每帧的
+   * 位置更新全在渲染进程算完再 `movePetWindow` 增量推过去。若改成每帧都
+   * 查工作区，一次抛掷要几十次 invoke，延迟会叠到肉眼可见的卡顿。
+   */
+  const launchPhysics = useCallback(
+    async (velocity: Vec) => {
+      const api = window.electronAPI;
+      if (!api?.getMotionBounds) return;
+      const b = await api.getMotionBounds().catch(() => null);
+      if (!b) {
+        // 拿不到边界就没有可以碰撞的墙，退回贴边，别让她悬在半空
+        void api.stickToEdge?.();
+        return;
+      }
+      const p = physicsRef.current;
+      if (p.frame != null) cancelAnimationFrame(p.frame);
+      p.body = makeThrowBody(b.winX, b.winY, velocity.x, velocity.y);
+      p.area = { x: b.areaX, y: b.areaY, width: b.areaW, height: b.areaH };
+      p.size = { width: b.winW, height: b.winH };
+      p.lastAt = performance.now();
+      p.lastLandedAt = 0;
+
+      // 拎起来的那一下：给一点声音反馈，让人知道「这次是甩，不是挪」
+      if (soundOnRef.current) {
+        playThrow(Math.min(1, Math.hypot(velocity.x, velocity.y) / 2000));
+      }
+
+      const frame = (now: number) => {
+        const st = physicsRef.current;
+        if (!st.body || !st.area || !st.size) return;
+        // dt 由物理层自己钳到 8ms，这里只负责传真实间隔（切后台回来的第一帧可能很大）
+        const dt = (now - st.lastAt) / 1000;
+        st.lastAt = now;
+
+        const before = st.body;
+        const { body, events } = stepPhysics(before, dt, st.area, st.size, DEFAULT_PHYSICS);
+        st.body = body;
+
+        const dx = Math.round(body.x - before.x);
+        const dy = Math.round(body.y - before.y);
+        if (dx !== 0 || dy !== 0) void api.movePetWindow?.(dx, dy);
+
+        for (const ev of events) {
+          if (ev.kind === 'land') {
+            // 反弹时每次触地都响；但 120ms 内不重复播，避免高帧率下音效糊成一片
+            if (soundOnRef.current && now - st.lastLandedAt > 120) {
+              st.lastLandedAt = now;
+              playLand(ev.speed / 2000);
+            }
+            // 落地抖一下：用户主动抛的才抖，自己飘下来的不抖
+            triggerAnimationRef.current?.('wobble', 'user');
+          } else if (ev.kind === 'wall' || ev.kind === 'ceiling') {
+            if (soundOnRef.current && now - st.lastLandedAt > 120) {
+              st.lastLandedAt = now;
+              playBump(ev.speed / 2000);
+            }
+          }
+        }
+
+        // 收尾：站稳就贴边（贴边是既有行为，保证她最后停在工作区底部）
+        if (body.settled) {
+          physicsRef.current.frame = null;
+          physicsRef.current.body = null;
+          void api.stickToEdge?.();
+          return;
+        }
+        st.frame = requestAnimationFrame(frame);
+      };
+      p.frame = requestAnimationFrame(frame);
+    },
+    []
+  );
+
+  // 掉落自救：分辨率变化、外接屏拔掉、全屏应用抢占，都可能让窗口落在
+  // 工作区外 —— 那时她就"没了"，而且用户完全不知道去哪找。每 20 秒查一次，
+  // 超过 25% 不可见就把自己拉回来（VPet 的 ResetPosition 同款）。
+  useEffect(() => {
+    const timer = setInterval(() => {
+      // 飞行中不插手：物理层自己知道在哪，中途纠正会打断落点
+      if (physicsRef.current.frame != null) return;
+      void recoverIfLost();
+    }, 20_000);
+    return () => clearInterval(timer);
+  }, [recoverIfLost]);
 
   useEffect(() => {
     log('[Pet] 组件初始化');
@@ -478,6 +641,9 @@ function App() {
       if (hintTimerRef.current) clearTimeout(hintTimerRef.current);
       if (animationTimerRef.current) clearTimeout(animationTimerRef.current);
       if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+      // 卸载时若还在飞行，必须取消 rAF：回调里持有 api.movePetWindow，
+      // 组件已销毁后继续推窗口只会报错或把窗口推到奇怪的位置
+      stopPhysics();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -524,12 +690,20 @@ function App() {
 
   const startIdleScheduler = useCallback(() => {
     if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    // 空闲动作与间隔都按当前养成数值抽：精力见底时她更爱伸懒腰、打哈欠，
+    // 间隔也拉长；数值不是 HUD 上的摆设，而是真的决定她在干什么。
+    // petStatsRef 每次渲染刷新，这里读到的永远是最新值，不需要进依赖数组。
+    const mood = () => {
+      const s = petStatsRef.current;
+      return { energy: s.energy, happiness: s.happiness, hunger: s.hunger };
+    };
     idleTimerRef.current = setTimeout(() => {
       if (statusRef.current === 'idle' && currentAnimRef.current === 'idle') {
-        const randomAnim = getRandomIdleAnimation();
-        triggerAnimationRef.current?.(randomAnim, 'idle');
+        const pick = pickIdleAnimation(mood());
+        log(`[Pet] 空闲动作 → ${pick.anim}（精力${Math.round(petStatsRef.current.energy)} 心情${Math.round(petStatsRef.current.happiness)}）`);
+        triggerAnimationRef.current?.(pick.anim, 'idle');
       }
-    }, getRandomIdleInterval());
+    }, getRandomIdleInterval(mood()));
   }, []);
   // ref 转发：让早于本函数声明的闭包（triggerAnimation 内部）能调到最新实现
   startIdleSchedulerRef.current = startIdleScheduler;
@@ -973,6 +1147,7 @@ function App() {
     if (cue.emotion) setCurrentEmotion(cue.emotion);
     if (cue.anim) triggerAnimationRef.current?.(cue.anim, 'user');
     if (cue.hearts) spawnHeartsRef.current?.();
+    if (cue.sfx === 'levelup' && soundOnRef.current) playLevelUp();
 
     if (sayTimerRef.current) clearTimeout(sayTimerRef.current);
     const ms = cue.ms ?? Math.min(12_000, 3_500 + text.length * 220);
@@ -989,6 +1164,9 @@ function App() {
   // 原来的单击直接开麦，等于把最重的功能挂在最容易被误触的手势上。
   const handlePointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
+    // 正在飞行中又被抓住 ⇒ 物理立刻让位。不取消的话 rAF 会继续推窗口，
+    // 出现「手已经按住了，她还在自己往下滑」的打架。
+    stopPhysics();
     // 用户碰她 = 脚本让位：不打断的话她自己的动作会在两秒后顶掉刚回的话
     autonomyRef.current?.interrupt();
     const p = pressRef.current;
@@ -998,7 +1176,9 @@ function App() {
     p.x = e.screenX;
     p.y = e.screenY;
 
-    dragStateRef.current = { dragging: true, startX: e.screenX, startY: e.screenY };
+    dragStateRef.current = { dragging: true, startX: e.screenX, startY: e.screenY, samples: [] };
+    // 音频上下文必须在用户手势里解锁，否则第一个音（通常是摸头）会被 WebView 静默吞掉
+    if (soundOnRef.current) resumeAudio();
 
     if (p.timer) clearTimeout(p.timer);
     p.timer = setTimeout(() => {
@@ -1033,6 +1213,13 @@ function App() {
     }
     const result = companionRef.current?.poke();
     if (result?.report) void handlePetActionRef.current?.('pet');
+    // 摸头音跟着连击走：第一下、第三下音调递进，第六下（傲娇拒绝）换成下滑音。
+    // scene 比 comboCount 更适合作输入 —— 引擎已经把分档算好了，这里不重复一遍阈值。
+    if (soundOnRef.current && result) {
+      if (result.scene === 'pet6') playPet('reject');
+      else if (result.scene === 'pet3') playPet(3);
+      else playPet(1);
+    }
   };
   finishPressRef.current = handlePointerUp;
 
@@ -1182,16 +1369,38 @@ function App() {
       }
     }
 
+    // 采样指针位置，供松手时估算「甩出去」的速度。
+    // 只保留最近 RELEASE_WINDOW_MS 毫秒的点：更早的采样反映的是上一段拖拽，
+    // 混进来会把速度平均得过低，导致明明甩了却不抛。
+    const samples = dragStateRef.current.samples;
+    samples.push({ x: e.screenX, y: e.screenY, t: performance.now() });
+    const cutoff = performance.now() - RELEASE_WINDOW_MS;
+    while (samples.length > 2 && samples[0].t < cutoff) samples.shift();
+
     window.electronAPI?.movePetWindow(dx, dy);
   }, []);
 
   const handleMouseUp = useCallback(() => {
     if (!dragStateRef.current.dragging) return;
     dragStateRef.current.dragging = false;
-    // 只有真的拖动过才贴边。单击现在是「摸头」，如果每次摸头都走一遍贴边判断，
+    // 只有真的拖动过才处理松手。单击现在是「摸头」，如果每次摸头都走一遍贴边判断，
     // 站在左边缘但悬在半空中的她会被一下一下地拽到屏幕底部。
-    if (pressRef.current.moved) window.electronAPI?.stickToEdge?.();
-  }, []);
+    if (!pressRef.current.moved) {
+      dragStateRef.current.samples = [];
+      return;
+    }
+
+    const velocity = estimateReleaseVelocity(dragStateRef.current.samples);
+    dragStateRef.current.samples = [];
+
+    if (shouldThrow(velocity)) {
+      // 甩出去 → 抛掷物理接管，她会真的落下来、弹几下、滑一小段
+      void launchPhysics(velocity);
+    } else {
+      // 轻轻挪一下就放 → 保持旧行为，直接贴边
+      window.electronAPI?.stickToEdge?.();
+    }
+  }, [launchPhysics]);
 
   // ---------- 陪伴引擎 ----------
   // 引擎不依赖 React：它每秒被 tick 一次，需要什么就通过 getter 现取（读的都是 ref，
@@ -1688,6 +1897,23 @@ function App() {
                 ))}
               </div>
             )}
+          </div>
+
+          <div
+            className="menu-item"
+            onClick={() => {
+              const next = !soundOn;
+              setSoundOn(next);
+              if (next) {
+                // 立刻给一声确认音：否则用户点了「打开声音」却什么都听不到，
+                // 会以为开关没生效（AudioContext 还没解锁时第一声可能出不来）
+                resumeAudio();
+                playPing();
+              }
+              setContextMenu((prev) => ({ ...prev, show: false }));
+            }}
+          >
+            {soundOn ? '🔊 音效' : '🔇 音效（已关）'}
           </div>
 
           <div

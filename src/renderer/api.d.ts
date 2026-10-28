@@ -7,6 +7,18 @@
  * 加方法时两边都要动：这里声明，tauri-bridge.ts 的 PORTED/EVENTS 里映射。
  */
 
+/** 抛掷物理用的边界快照：物理坐标，副屏上 area_x/area_y 可能为负 */
+interface MotionBounds {
+  areaX: number;
+  areaY: number;
+  areaW: number;
+  areaH: number;
+  winX: number;
+  winY: number;
+  winW: number;
+  winH: number;
+}
+
 interface ElectronApi {
   // 窗口控制
   toggleWindow(mode: 'admin' | 'pet'): Promise<any>;
@@ -16,6 +28,10 @@ interface ElectronApi {
   showWindow(mode: 'admin' | 'pet'): Promise<any>;
   hideWindow(mode: 'admin' | 'pet'): Promise<any>;
   stickToEdge(): Promise<any>;
+  /** 抛掷物理：抛出前取一次的工作区 + 窗口边界快照 */
+  getMotionBounds(): Promise<MotionBounds | null | undefined>;
+  /** 掉出屏幕超过阈值时把自己拉回工作区 */
+  recoverPetPosition(): Promise<{ x: number; y: number } | null | undefined>;
 
   // 语音事件
   onVoiceStart(callback: () => void): () => void;

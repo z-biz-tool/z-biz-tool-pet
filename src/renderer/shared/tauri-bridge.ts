@@ -23,6 +23,9 @@ const PORTED: Record<string, { cmd: string; params?: string[] }> = {
   setPetPositionWithBounds: { cmd: 'pet_set_position', params: ['x', 'y'] },
   triggerAnimation: { cmd: 'pet_trigger_animation', params: ['animType'] },
   stickToEdge: { cmd: 'window_stick_to_edge' },
+  // 抛掷物理：开始飞行前取一次边界快照，之后整段飞行都在渲染进程自己积分
+  getMotionBounds: { cmd: 'window_get_motion_bounds' },
+  recoverPetPosition: { cmd: 'window_recover_position' },
   toggleStealth: { cmd: 'pet_toggle_stealth', params: ['enabled'] },
   getStealthMode: { cmd: 'pet_get_stealth_mode' },
   shortcutsList: { cmd: 'shortcuts_list' },

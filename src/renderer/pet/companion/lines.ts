@@ -170,6 +170,12 @@ export interface SceneCue {
   ms?: number;
   /** 是否飘心 */
   hearts?: boolean;
+  /**
+   * 这句话配什么音效。只在少数场合给：升级/达成值得被「听见」，
+   * 而问候、状态提醒这类每天出现几十次的声音一旦加了会立刻变成噪音。
+   * 摸头的音不走这里 —— 它由手势层直接播，跟台词无关。
+   */
+  sfx?: 'levelup';
 }
 
 /**
@@ -199,7 +205,7 @@ export const SCENE_CUES: Record<Scene, SceneCue> = {
   focusGiveUp: { emotion: 'neutral' },
   sit: { anim: 'stretch', emotion: 'comforting' },
   drink: { emotion: 'comforting' },
-  levelup: { anim: 'bounce', emotion: 'loving', hearts: true, ms: 6000 },
+  levelup: { anim: 'bounce', emotion: 'loving', hearts: true, ms: 6000, sfx: 'levelup' },
 };
 
 /** 台词里的 {me} / {m} 是占位符，别让它们漏到界面上 */

@@ -61,6 +61,8 @@ pub fn run() {
             commands::window_move_pet,
             commands::window_set_pet_position,
             commands::window_stick_to_edge,
+            commands::window_get_motion_bounds,
+            commands::window_recover_position,
             commands::pet_set_position,
             commands::pet_trigger_animation,
             commands::pet_toggle_stealth,

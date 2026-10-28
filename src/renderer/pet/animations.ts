@@ -301,20 +301,115 @@ export const ANIMATIONS: Record<AnimationType, AnimationConfig> = {
 
 // ---------- 空闲动画调度 ----------
 
-/** 空闲时随机触发的动画列表（不含 idle/float/sleep/blink/lookAtCursor/chase） */
-const IDLE_ANIMATIONS: AnimationType[] = [
-  'walk', 'dance', 'roll', 'jump', 'wiggle',
-  'stretch', 'spin', 'yawn', 'bounce', 'wobble',
-];
-
-/** 获取一个随机空闲动画 */
-export function getRandomIdleAnimation(): AnimationType {
-  return IDLE_ANIMATIONS[Math.floor(Math.random() * IDLE_ANIMATIONS.length)];
+/**
+ * 空闲动画按养成数值加权，而不是均匀随机。
+ *
+ * 均匀随机的问题是「她精神抖擞和她快累瘫了，做同一批动作、同样频繁」——
+ * 数值就只是 HUD 上的六根条子，跟行为没有任何关系，这也是「没灵魂」最直接的来源。
+ * 现在每个动作声明它**想要的角色状态**，抽样时按「当前状态离这个状态有多远」打折：
+ * 差得越远，被选中的概率越低（四次方衰减，保证差距大时几乎不出现）。
+ *
+ * 这套做法照的是 Shimeji / DyberPet 的「期望状态 − 当前状态」加权模型，
+ * 但简化成六维直接映射，不额外引入一套 FSM。
+ */
+interface IdleAnimationProfile {
+  anim: AnimationType;
+  /** 权重基数：即使完全匹配，也有些动作天生更常见（散步 > 旋转） */
+  base: number;
+  /** 这个动作期望的精力值（0-100） */
+  wantEnergy: number;
+  /** 期望的心情值（0-100） */
+  wantHappiness: number;
+  /** 期望的饱食值。饿着肚子还活蹦乱跳会很违和 */
+  wantHunger?: number;
 }
 
-/** 获取随机空闲间隔（10-30秒） */
-export function getRandomIdleInterval(): number {
-  return 10000 + Math.random() * 20000;
+/**
+ * 精力期望定得松一些（容忍 20 分差距仍有一半概率），心情定得紧（15 分就砍半）——
+ * 心情是她「想不想动」的主变量，精力更多是「动得动不了」的物理限制。
+ *
+ * wantHunger 只给**耗能的动作**（跳舞/翻滚/跳跃/旋转/弹跳）：饿着肚子还
+ * 活蹦乱跳很违和，所以饥饿会把概率推向散步、伸懒腰这类省力动作，而不是
+ * 让她僵住不动。省力动作不写 wantHunger —— 饿的时候做它们是正常的。
+ */
+const IDLE_PROFILES: IdleAnimationProfile[] = [
+  { anim: 'walk',    base: 14, wantEnergy: 62, wantHappiness: 58 },
+  { anim: 'dance',   base: 9,  wantEnergy: 78, wantHappiness: 85, wantHunger: 70 },
+  { anim: 'roll',    base: 6,  wantEnergy: 82, wantHappiness: 72, wantHunger: 70 },
+  { anim: 'jump',    base: 8,  wantEnergy: 88, wantHappiness: 70, wantHunger: 75 },
+  { anim: 'wiggle',  base: 10, wantEnergy: 45, wantHappiness: 40 },
+  { anim: 'stretch', base: 12, wantEnergy: 35, wantHappiness: 50 },
+  { anim: 'spin',    base: 5,  wantEnergy: 85, wantHappiness: 80, wantHunger: 75 },
+  { anim: 'yawn',    base: 9,  wantEnergy: 15, wantHappiness: 45 },
+  { anim: 'bounce',  base: 7,  wantEnergy: 70, wantHappiness: 75, wantHunger: 70 },
+  { anim: 'wobble',  base: 6,  wantEnergy: 30, wantHappiness: 35 },
+];
+
+/** 距离 → 折扣系数。σ 分别是精力/心情的容忍宽度 */
+function decay(dist: number, sigma: number): number {
+  const d = Math.abs(dist) / sigma;
+  return Math.pow(0.25, d * d); // 高斯形状，但用 0.25 作底让衰减更陡
+}
+
+export interface IdleMood {
+  energy: number;
+  happiness: number;
+  hunger: number;
+}
+
+/** 被抽出的空闲动画，附带「为什么是它」—— 便于测试与日志 */
+export interface WeightedPick {
+  anim: AnimationType;
+  /** 未归一化的权重（用于测试断言趋势） */
+  weight: number;
+}
+
+/** 六维数值 + 随机源 ⇒ 一个空闲动作。rng 可注入，测试才能确定性断言 */
+export function pickIdleAnimation(
+  mood: Partial<IdleMood> = {},
+  rng: () => number = Math.random
+): WeightedPick {
+  const energy = clampStat(mood.energy, 60);
+  const happiness = clampStat(mood.happiness, 60);
+  const hunger = clampStat(mood.hunger, 60);
+
+  const scored = IDLE_PROFILES.map((p) => {
+    let w = p.base;
+    w *= decay(p.wantEnergy - energy, 20);
+    w *= decay(p.wantHappiness - happiness, 15);
+    if (p.wantHunger !== undefined) w *= decay(p.wantHunger - hunger, 25);
+    return { anim: p.anim, weight: Math.max(w, 0.001) };
+  });
+
+  const total = scored.reduce((s, x) => s + x.weight, 0);
+  let r = rng() * total;
+  for (const item of scored) {
+    r -= item.weight;
+    if (r <= 0) return item;
+  }
+  return scored[scored.length - 1];
+}
+
+function clampStat(v: number | undefined, fallback: number): number {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return fallback;
+  return Math.min(100, Math.max(0, v));
+}
+
+/** 兼容旧调用点：无参时按「状态良好」的默认值抽一个 */
+export function getRandomIdleAnimation(): AnimationType {
+  return pickIdleAnimation().anim;
+}
+
+/**
+ * 获取随机空闲间隔。精力越低，间隔越长（累的时候不想动）。
+ * 基础 10-30 秒，精力满时接近下界，精力见底时接近上界的 1.8 倍。
+ */
+export function getRandomIdleInterval(mood: Partial<IdleMood> = {}): number {
+  const energy = clampStat(mood.energy, 60);
+  const base = 10000 + Math.random() * 20000;
+  // energy 100 → ×1.0，energy 0 → ×1.8
+  const slack = 1 + (1 - energy / 100) * 0.8;
+  return Math.round(base * slack);
 }
 
 /** 获取随机眨眼间隔（3-8秒） */
