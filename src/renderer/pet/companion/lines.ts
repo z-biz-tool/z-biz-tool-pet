@@ -168,8 +168,9 @@ export interface SceneCue {
   emotion?: Emotion;
   /** 气泡停留时长，默认按字数算 */
   ms?: number;
-  /** 是否飘心 */
-  hearts?: boolean;
+  /** 是否飘心。给数字则按该数量从点击位置扇形散开（连击越深越多），
+   *  true 走默认 3 颗。摸头的分档在这里定，手势层不重复一套阈值。 */
+  hearts?: boolean | number;
   /**
    * 这句话配什么音效。只在少数场合给：升级/达成值得被「听见」，
    * 而问候、状态提醒这类每天出现几十次的声音一旦加了会立刻变成噪音。
@@ -191,8 +192,8 @@ export const SCENE_CUES: Record<Scene, SceneCue> = {
   greetNight: { anim: 'yawn', emotion: 'sleepy' },
   idle: { emotion: 'neutral' },
   comeback: { anim: 'bounce', emotion: 'happy' },
-  pet1: { anim: 'petted', emotion: 'happy', hearts: true },
-  pet3: { anim: 'petted', emotion: 'shy', hearts: true },
+  pet1: { anim: 'petted', emotion: 'happy', hearts: 3 },
+  pet3: { anim: 'petted', emotion: 'shy', hearts: 5 },
   pet6: { anim: 'shake', emotion: 'tsundere' },
   hungry: { emotion: 'whispering' },
   sleepy: { anim: 'yawn', emotion: 'sleepy' },

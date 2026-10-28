@@ -454,6 +454,55 @@ export function getAnimationCSS(animType: AnimationType): string {
   return `${config.keyframes} ${config.duration}ms ${config.timing} ${iter}`;
 }
 
+// ---------- 摸头爱心布局 ----------
+
+// 舞台几何：与 pet.css 的 .char-stage（238×399, left:15, 贴底）和
+// tauri.conf.json 的 pet 窗口（268×512）保持一致。爱心渲染在 .char-breathe
+// 内即舞台坐标系，窗口 clientX/Y 要先减掉这两个偏移才能落位。
+export const STAGE_WIDTH = 238;
+export const STAGE_HEIGHT = 399;
+export const STAGE_OFFSET_X = 15;
+/** 512 - 399：舞台贴底，顶部留给气泡 */
+export const STAGE_OFFSET_Y = 113;
+
+export interface HeartSpot {
+  /** 舞台坐标：爱心元素直接用 left/top 落位 */
+  x: number;
+  y: number;
+  /** 错峰出场：每颗比前一颗晚 60ms，同一帧全弹出来像贴纸 */
+  delayMs: number;
+}
+
+/**
+ * 摸头爱心的落点：从被摸的位置扇形散开。
+ *
+ * clickX/clickY 是舞台坐标（窗口 clientX/Y 减 STAGE_OFFSET_*）。rng 可注入 ——
+ * 布局是纯函数，能在 node --test 里断言「不越界、扇形对称、错峰递增」。
+ * 上下界留边：横向 10px 免得 emoji 被裁，纵向不许低于舞台底部上方 60px
+ * （爱心往上飘，落在脚边会直接飘出舞台）。
+ */
+export function heartSpots(
+  clickX: number,
+  clickY: number,
+  count: number,
+  rng: () => number = Math.random
+): HeartSpot[] {
+  const n = Math.min(8, Math.max(1, Math.floor(count)));
+  const spots: HeartSpot[] = [];
+  for (let i = 0; i < n; i++) {
+    // 扇形：第 i 颗横向偏移 (i - 居中) * 18px，再加 ±6px 抖动让排列不呆板
+    const spread = (i - (n - 1) / 2) * 18;
+    const dx = spread + (rng() * 2 - 1) * 6;
+    const dy = (rng() * 2 - 1) * 8;
+    spots.push({
+      x: Math.min(STAGE_WIDTH - 10, Math.max(10, clickX + dx)),
+      y: Math.min(STAGE_HEIGHT - 60, Math.max(20, clickY + dy)),
+      delayMs: i * 60,
+    });
+  }
+  return spots;
+}
+
 // ---------- 右键菜单动画列表 ----------
 
 export const ANIMATION_MENU_ITEMS: { label: string; value: AnimationType }[] = [

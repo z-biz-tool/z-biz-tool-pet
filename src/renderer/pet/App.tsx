@@ -8,6 +8,12 @@ import {
   getRandomIdleInterval,
   canInterruptAnimation,
   getAnimationCSS,
+  heartSpots,
+  STAGE_WIDTH,
+  STAGE_HEIGHT,
+  STAGE_OFFSET_X,
+  STAGE_OFFSET_Y,
+  type HeartSpot,
 } from './animations';
 import {
   DEFAULT_PHYSICS,
@@ -216,7 +222,8 @@ function App() {
   // 动画状态
   const [currentAnimation, setCurrentAnimation] = useState<AnimationType>('idle');
   const [animationCSS, setAnimationCSS] = useState<string>(getAnimationCSS('idle'));
-  const [hearts, setHearts] = useState<number[]>([]);
+  // 爱心带落点：从被摸的位置扇形散开，而不是永远钉在同一个坐标
+  const [hearts, setHearts] = useState<(HeartSpot & { id: number })[]>([]);
   const [zzzVisible, setZzzVisible] = useState(false);
   // 跟随鼠标的微小倾斜：旧版是「瞳孔跟随」，立绘上做不到动眼，
   // 改成整个人向鼠标方向偏一点点 —— 更含蓄，但一样能感觉到她在看你。
@@ -259,7 +266,7 @@ function App() {
   const streamBufRef = useRef('');
   const petStatsRef = useRef<PetCoreStats>(DEFAULT_STATS);
   petStatsRef.current = petStats;
-  const handlePetActionRef = useRef<((action: string) => void) | null>(null);
+  const handlePetActionRef = useRef<((action: string, opts?: { skipHearts?: boolean }) => void) | null>(null);
 
   // 2026-10-21：下面三个 ref 是为修 ESLint 报的 3 条 `react-hooks/exhaustive-deps`
   // （缺依赖）而加的**转发层**。原来三处 useCallback 的依赖数组都是 `[]`，
@@ -272,7 +279,7 @@ function App() {
   // 永远是最新实现，依赖数组保持 `[]`。
   const triggerAnimationRef = useRef<((animType: AnimationType, source?: 'user' | 'status' | 'idle') => void) | null>(null);
   const startIdleSchedulerRef = useRef<(() => void) | null>(null);
-  const spawnHeartsRef = useRef<(() => void) | null>(null);
+  const spawnHeartsRef = useRef<((count?: number, origin?: { x: number; y: number }) => void) | null>(null);
   const hintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // 统一提示条：后一条提示覆盖前一条，避免旧定时器把新提示提前清掉
@@ -385,6 +392,8 @@ function App() {
     samples: [],
   });
   // 一次按下的完整生命周期：按下 → (拖拽 | 长按说话 | 点击摸头) 三选一
+  // cx/cy 是 client 坐标（窗口内），爱心落点要用它 —— screenX 是屏幕坐标，
+  // 多显示器/负偏移下减出来的窗口内位置会错位。
   const pressRef = useRef<{
     downAt: number;
     timer: ReturnType<typeof setTimeout> | null;
@@ -392,7 +401,12 @@ function App() {
     moved: boolean;
     x: number;
     y: number;
-  }>({ downAt: 0, timer: null, recording: false, moved: false, x: 0, y: 0 });
+    cx: number;
+    cy: number;
+  }>({ downAt: 0, timer: null, recording: false, moved: false, x: 0, y: 0, cx: 0, cy: 0 });
+  // 最近一次摸头的落点：poke() 会同步触发 say() → handleCompanionSay，
+  // 爱心在那条链里生成，但点击坐标只有手势层知道 —— 用 ref 递过去。
+  const pokeOriginRef = useRef<{ x: number; y: number } | null>(null);
   const lastStruggleAtRef = useRef(0);
   /** 摸头失败提示的节流：0 表示还没提示过 */
   const petErrorHintRef = useRef(0);
@@ -1185,7 +1199,13 @@ function App() {
 
     if (cue.emotion) setCurrentEmotion(cue.emotion);
     if (cue.anim) triggerAnimationRef.current?.(cue.anim, 'user');
-    if (cue.hearts) spawnHeartsRef.current?.();
+    // hearts 可以是数字（摸头按连击档位发 3/5 颗）或 true（升级等，默认 3 颗）。
+    // 落点来自手势层记录的 pokeOriginRef；其它场合没有点击点，用默认位置。
+    if (cue.hearts) {
+      const count = typeof cue.hearts === 'number' ? cue.hearts : 3;
+      const origin = pokeOriginRef.current ?? undefined;
+      spawnHeartsRef.current?.(count, origin);
+    }
     if (cue.sfx === 'levelup' && soundOnRef.current) playLevelUp();
 
     if (sayTimerRef.current) clearTimeout(sayTimerRef.current);
@@ -1214,6 +1234,8 @@ function App() {
     p.moved = false;
     p.x = e.screenX;
     p.y = e.screenY;
+    p.cx = e.clientX;
+    p.cy = e.clientY;
 
     dragStateRef.current = { dragging: true, startX: e.screenX, startY: e.screenY, samples: [] };
     // 音频上下文必须在用户手势里解锁，否则第一个音（通常是摸头）会被 WebView 静默吞掉
@@ -1250,8 +1272,19 @@ function App() {
       else if (statusRef.current === 'recording') stopRecording();
       return;
     }
+    // 爱心从被摸的位置冒出来。poke() 会同步触发 say() → handleCompanionSay，
+    // 那条链里要读落点，所以必须在 poke() 之前放好；client 坐标先换算成舞台坐标。
+    pokeOriginRef.current = {
+      x: pressRef.current.cx - STAGE_OFFSET_X,
+      y: pressRef.current.cy - STAGE_OFFSET_Y,
+    };
     const result = companionRef.current?.poke();
-    if (result?.report) void handlePetActionRef.current?.('pet');
+    // say() 是同步的，落点用完即清 —— 傲娇拒绝（pet6）不飘心，
+    // 别把这个点击位置留给下一场无关的爱心（升级/专注结束）捡到。
+    pokeOriginRef.current = null;
+    // report 只负责上报数值。爱心由上面的 cue 通道按档位发（pet6 一颗都不发），
+    // 这里再 spawn 一次会让拒绝时也冒出三颗心，还会把点击落点换成默认位置。
+    if (result?.report) void handlePetActionRef.current?.('pet', { skipHearts: true });
     // 摸头音跟着连击走：第一下、第三下音调递进，第六下（傲娇拒绝）换成下滑音。
     // scene 比 comboCount 更适合作输入 —— 引擎已经把分档算好了，这里不重复一遍阈值。
     if (soundOnRef.current && result) {
@@ -1262,8 +1295,18 @@ function App() {
   };
   finishPressRef.current = handlePointerUp;
 
-  const spawnHearts = useCallback(() => {
-    setHearts([Date.now(), Date.now() + 100, Date.now() + 200]);
+  /**
+   * 飘爱心。origin 缺省（菜单里点「玩耍/摸一下」、升级、专注结束）时落在
+   * 舞台中上部；摸头链路会传点击落点，爱心就从被摸的位置扇形散开。
+   */
+  const spawnHearts = useCallback((count = 3, origin?: { x: number; y: number }) => {
+    const spots = heartSpots(
+      origin?.x ?? STAGE_WIDTH / 2,
+      origin?.y ?? STAGE_HEIGHT * 0.28,
+      count
+    );
+    const base = Date.now();
+    setHearts(spots.map((s, i) => ({ ...s, id: base + i })));
     setTimeout(() => setHearts([]), 2000);
   }, []);
   // ref 转发：让早于本函数声明的闭包（handlePetAction）能调到最新实现
@@ -1297,8 +1340,10 @@ function App() {
     setCompanionCfg(next);
   };
 
-  // 宠物互动动作：调用养成 IPC 后刷新状态与情绪
-  const handlePetAction = useCallback(async (action: string) => {
+  // 宠物互动动作：调用养成 IPC 后刷新状态与情绪。
+  // skipHearts：摸头链路的爱心由 cue 通道按连击档位发（含 pet6 一颗不发），
+  // 这里只补「玩耍」和菜单里直接点「摸一下」这两种没有 cue 的场合。
+  const handlePetAction = useCallback(async (action: string, opts?: { skipHearts?: boolean }) => {
     const api = window.electronAPI;
     if (!api) return;
     const call: Record<string, () => Promise<any>> = {
@@ -1321,7 +1366,7 @@ function App() {
         // 抚摸的情绪由陪伴层按连击档位接管（害羞/傲娇），这里再覆盖一次会把它冲掉
         if (action !== 'pet') setCurrentEmotion(resolveEmotion(stats as PetCoreStats));
       }
-      if (action === 'play' || action === 'pet') spawnHeartsRef.current?.();
+      if ((action === 'play' || action === 'pet') && !opts?.skipHearts) spawnHeartsRef.current?.();
     } catch (error) {
       log('[Pet] 养成动作失败 (' + action + '): ' + errorMessage(error, '未知错误'));
       // 摸头是最轻、最高频的互动：失败时如果每次都弹一条大字号 toast，
@@ -1667,8 +1712,12 @@ function App() {
           )}
           {status === 'interrupted' && <div className="interrupt-flash" />}
 
-          {hearts.map((id, i) => (
-            <div key={id} className="heart-particle" style={{ left: 60 + i * 34, animationDelay: `${i * 0.15}s` }}>
+          {hearts.map((h) => (
+            <div
+              key={h.id}
+              className="heart-particle"
+              style={{ left: h.x, top: h.y, animationDelay: `${h.delayMs}ms` }}
+            >
               💕
             </div>
           ))}
