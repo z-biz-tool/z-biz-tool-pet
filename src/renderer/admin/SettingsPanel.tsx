@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Form, Input, InputNumber, Button, Divider, Select, message, Tag, Popconfirm } from 'antd';
+import { Form, Input, InputNumber, Button, Divider, Select, message, Tag, Popconfirm, Switch } from 'antd';
 import {
   SaveOutlined,
   ReloadOutlined,
@@ -12,6 +12,7 @@ import {
   EyeOutlined,
   SettingOutlined,
   PlusOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons';
 import { DEFAULT_CONFIG, SCENE_PROMPTS } from '../shared/prompts';
 import { errorMessage } from '../shared/interaction';
@@ -90,6 +91,16 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose, onSave }) 
   // 未保存提示：468px 的侧栏里「保存」在底部，滚动到中间时完全看不见，
   // 得让用户知道自己改过东西（此前改完直接关掉窗口 = 白改）
   const [dirty, setDirty] = useState(false);
+  // 心智层探活结果：延迟是这里唯一真正重要的数字 ——
+  // 20 秒才回一句的模型，做内心活动会让桌宠看起来像卡住了
+  const [mindProbe, setMindProbe] = useState<{
+    ok: boolean;
+    latencyMs?: number;
+    reply?: string;
+    verdict?: string;
+    error?: string;
+  } | null>(null);
+  const [probingMind, setProbingMind] = useState(false);
 
   // 2026-10-21：ref 转发层，修 ESLint 报的 "useEffect has a missing dependency: 'loadConfig'"。
   // 原来 `loadConfig` 是本文件里**普通函数**（不是 useCallback），且定义在调用它的
@@ -400,6 +411,24 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose, onSave }) 
     }
   };
 
+  const handleProbeMind = async () => {
+    setProbingMind(true);
+    setMindProbe(null);
+    try {
+      // 先把表单里的地址/模型落盘，探活读的是已保存的配置
+      const values = form.getFieldsValue();
+      onSave({ ...(DEFAULT_CONFIG as PetConfig), ...values } as PetConfig);
+      const res = await window.electronAPI?.mindPing();
+      setMindProbe(res ?? { ok: false, error: '没有回应' });
+      if (res?.ok) message.success(`可用 · ${res.latencyMs}ms`);
+      else message.warning(`连不上：${res?.error ?? '未知原因'}`);
+    } catch (e) {
+      setMindProbe({ ok: false, error: errorMessage(e, '未知错误') });
+    } finally {
+      setProbingMind(false);
+    }
+  };
+
   // 同步表单值到 providers
   const syncProviderFromForm = () => {
     const baseUrl = form.getFieldValue('aiBaseUrl');
@@ -694,6 +723,86 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ open, onClose, onSave }) 
                   }))}
                 />
               </Form.Item>
+            </div>
+          </section>
+
+          {/* ===== 心智 ===== */}
+          <section className="adm-sec">
+            <div className="adm-sec-h">
+              <div>
+                <div className="adm-sec-name">心智</div>
+                <div className="adm-sec-desc">
+                  她记得住事、也会自己找事做。这两件事都要一个能跑小模型的地址。
+                </div>
+              </div>
+            </div>
+            <div className="adm-sec-body">
+              <Form.Item
+                label="自己活动"
+                name="mindEnabled"
+                valuePropName="checked"
+                extra="关掉后她只在被叫到时说话，不会自己走动、发呆、想事情"
+              >
+                <Switch />
+              </Form.Item>
+              <Form.Item
+                label="活动间隔"
+                name="mindIntervalSec"
+                extra="两次自主行为之间的基准间隔，实际会在 ±35% 上下浮动"
+              >
+                <Select
+                  options={[
+                    { value: 60, label: '1 分钟（活泼）' },
+                    { value: 120, label: '2 分钟（默认）' },
+                    { value: 180, label: '3 分钟（安静）' },
+                    { value: 300, label: '5 分钟（很安静）' },
+                  ]}
+                />
+              </Form.Item>
+              <Form.Item
+                label="自动记忆"
+                name="autoExtractMemory"
+                valuePropName="checked"
+                extra="聊天时顺手把关于你的事记下来；关掉后只保留手动教的"
+              >
+                <Switch />
+              </Form.Item>
+              <Form.Item
+                label="心智模型地址"
+                name="mindUrl"
+                extra="留空就用上面选中的提供商。填局域网机器的地址，可以让聊天和杂活分开跑，互不抢显存"
+              >
+                <Input placeholder="http://192.168.31.249:11434" allowClear />
+              </Form.Item>
+              <Form.Item
+                label="心智模型"
+                name="mindModel"
+                extra="建议选一个常驻的小模型：每次换模型要重新加载权重，慢起来几十秒"
+              >
+                <Input placeholder="qwen3:8b" allowClear />
+              </Form.Item>
+              {mindProbe && (
+                <div
+                  className="adm-sec-note"
+                  style={{
+                    borderLeftColor: mindProbe.ok ? 'var(--accent)' : '#ff7875',
+                    color: mindProbe.ok ? 'var(--text-2)' : '#ff9c9c',
+                  }}
+                >
+                  {mindProbe.ok
+                    ? `${mindProbe.verdict ?? '可用'} · ${mindProbe.latencyMs}ms · 回了「${mindProbe.reply ?? ''}」`
+                    : `连不上：${mindProbe.error ?? '未知原因'}`}
+                </div>
+              )}
+              <Button
+                block
+                icon={<ThunderboltOutlined />}
+                loading={probingMind}
+                onClick={handleProbeMind}
+                style={{ marginTop: 4 }}
+              >
+                存下并测一下她能不能想事情
+              </Button>
             </div>
           </section>
 

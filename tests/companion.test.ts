@@ -214,7 +214,7 @@ describe('台词', () => {
   });
 
   test('每个角色都能取到属于自己的台词', () => {
-    for (const id of ['chatgpt', 'claude', 'gemini', 'deepseek', 'midjourney', 'suno']) {
+    for (const id of ['taoyao', 'chatgpt', 'claude', 'gemini', 'deepseek', 'midjourney', 'suno']) {
       const line = pickLine('pet1', { characterId: id, name: 'x' });
       assert.ok(line.length > 0, `${id} 缺少摸头台词`);
     }

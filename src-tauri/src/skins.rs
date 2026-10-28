@@ -31,7 +31,17 @@ type Preset = (
 );
 
 const PRESETS: &[Preset] = &[
-    // 2026-10-27：皮肤语义从「圆猫换色」变成「6 个立绘角色各一套配色」。
+    // 2026-10-28：新增原创角色「桃夭」并作为默认（门面不该是 AI 产品的娘化形象）。
+    (
+        "taoyao",
+        "桃夭",
+        "#e9b7a6",
+        "#ffe6da",
+        "#8a5a4c",
+        "rgba(255, 170, 170, 0.45)",
+        "#f5a68c",
+    ),
+    // 2026-10-27：皮肤语义从「圆猫换色」变成「立绘角色各一套配色」。
     // 这份表和 src/renderer/pet/characters/index.ts 是同一个清单的两种语言版本，
     // id / 名称 / 六个颜色必须逐字一致（渲染层认 id 回查立绘，抄错就是张冠李戴）。
     (
@@ -176,17 +186,22 @@ mod tests {
     #[test]
     fn presets_match_the_renderer_characters() {
         let skins = pet_get_skins().as_array().expect("必须是数组").clone();
-        assert_eq!(skins.len(), 6, "6 个立绘角色，多一个少一个都会让 id 对不上立绘");
+        assert_eq!(skins.len(), 7, "7 个立绘角色，多一个少一个都会让 id 对不上立绘");
         // id 顺序与 characters/index.ts 完全一致：渲染层按数组顺序渲染换角色菜单
         let ids: Vec<&str> = skins.iter().filter_map(|s| s["id"].as_str()).collect();
         assert_eq!(
             ids,
-            vec!["chatgpt", "claude", "gemini", "deepseek", "midjourney", "suno"]
+            vec![
+                "taoyao", "chatgpt", "claude", "gemini", "deepseek", "midjourney", "suno",
+            ]
         );
-        assert_eq!(skins[0]["name"], json!("茉白"));
-        assert_eq!(skins[0]["colors"]["accent"], json!("#4ecdc4"));
-        assert_eq!(skins[2]["colors"]["bodyDark"], json!("#4a2f9e"));
-        assert_eq!(skins[5]["colors"]["body"], json!("#f07a4b"));
+        // 默认角色必须是原创的桃夭，而不是任何 AI 产品的娘化形象
+        assert_eq!(skins[0]["name"], json!("桃夭"));
+        assert_eq!(skins[0]["colors"]["accent"], json!("#f5a68c"));
+        assert_eq!(skins[1]["name"], json!("茉白"));
+        assert_eq!(skins[1]["colors"]["accent"], json!("#4ecdc4"));
+        assert_eq!(skins[3]["colors"]["bodyDark"], json!("#4a2f9e"));
+        assert_eq!(skins[6]["colors"]["body"], json!("#f07a4b"));
         for skin in &skins {
             assert_eq!(skin["colors"]["eye"], json!(EYE), "{skin}");
             assert_eq!(skin["isCustom"], json!(false));

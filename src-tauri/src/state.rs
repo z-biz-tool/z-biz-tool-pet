@@ -41,6 +41,12 @@ pub fn default_config() -> Value {
         "themeColor": "#4ecdc4",
         "stealthMode": true,
         "memoryEnabled": true,
+        // ---- 心智层（2026-10-28）：记忆抽取 + 自主内心的模型来源 ----
+        // mindUrl/mindModel 留空 = 复用主对话 provider，单模型用户不用填
+        "mindEnabled": true,
+        "mindUrl": "",
+        "mindModel": "",
+        "mindIntervalSec": 120,
         "sceneryEnabled": true,
         "particleEnabled": true,
         "taskSchedulerEnabled": true,

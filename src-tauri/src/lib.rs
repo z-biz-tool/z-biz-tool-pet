@@ -6,6 +6,7 @@ mod limiter;
 mod log;
 mod meeting;
 mod memory;
+mod mind;
 mod notify;
 mod router;
 mod runtime;
@@ -64,6 +65,18 @@ pub fn run() {
             commands::pet_trigger_animation,
             commands::pet_toggle_stealth,
             commands::pet_get_stealth_mode,
+            memory::memory_list,
+            memory::memory_add,
+            memory::memory_update,
+            memory::memory_delete,
+            memory::memory_clear,
+            memory::memory_stats,
+            memory::memory_recall_preview,
+            mind::mind_beat,
+            mind::mind_diary,
+            mind::mind_ping,
+            mind::mind_extract_now,
+            mind::mind_busy,
             state::config_load,
             state::config_save,
             state::stt_models,

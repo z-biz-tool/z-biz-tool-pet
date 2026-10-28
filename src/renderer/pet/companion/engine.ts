@@ -62,6 +62,8 @@ export interface CompanionStat {
 
 export interface CompanionSnapshot {
   mode: CompanionMode;
+  /** 距上一次真实互动多少毫秒。自主行为靠它判断"他多久没理我了" */
+  idleMs: number;
   /** 专注剩余毫秒，非专注态为 0 */
   remainMs: number;
   totalMs: number;
@@ -279,6 +281,7 @@ export class CompanionEngine {
   getSnapshot(): CompanionSnapshot {
     return {
       mode: this.mode,
+      idleMs: this.now() - this.lastInteraction,
       remainMs: this.focusRemainMs,
       totalMs: this.focusTotalMs,
       paused: this.focusPaused,

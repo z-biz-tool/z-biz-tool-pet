@@ -144,8 +144,72 @@ interface ElectronApi {
   onMeetingSegment(callback: (segment: any) => void): () => void;
   onMeetingRollingSummary(callback: (summary: string) => void): () => void;
 
+  // ---------- 长期记忆 v2（2026-10-28） ----------
+  // 与 Rust 侧 Memory 结构一一对应；source 说明这条记忆怎么来的
+  // （regex=正则兜底 / llm=她自己记下的 / manual=你让她记的 / episode=日记）
+  memoryList(query?: string, kind?: string, limit?: number): Promise<MemoryEntry[]>;
+  memoryAdd(content: string, kind?: string, key?: string, confidence?: number): Promise<MemoryEntry>;
+  memoryUpdate(id: string, patch: Partial<MemoryEntry>): Promise<MemoryEntry | null>;
+  memoryDelete(id: string): Promise<boolean>;
+  memoryClear(scope?: 'all' | 'archived'): Promise<number>;
+  memoryStats(): Promise<MemoryStats>;
+  /** 「她会怎么想起这件事」：给她一句话，看她想起什么 */
+  memoryRecallPreview(query: string): Promise<{ context: string; hits: MemoryEntry[] }>;
+
+  // ---------- 心智层（2026-10-28） ----------
+  /** 她自己想干嘛。慢（可能几十秒），调用方应当是"发出去就忘掉" */
+  mindBeat(state?: Record<string, unknown>): Promise<MindResult>;
+  mindDiary(limit?: number): Promise<Array<{ id: string; content: string; at: string; source: string; importance: number }>>;
+  mindPing(): Promise<{ ok: boolean; model: string; baseUrl: string; latencyMs: number; reply?: string; error?: string; verdict?: string }>;
+  mindExtractNow(): Promise<{ ok: boolean; added?: number; error?: string }>;
+  mindBusy(): Promise<boolean>;
+
   // 日志
   log(msg: string): void;
+}
+
+interface MemoryEntry {
+  id: string;
+  /** fact | preference | person | event | plan | trait */
+  kind: string;
+  key: string;
+  content: string;
+  detail: string;
+  confidence: number;
+  /** regex | llm | manual | episode | migration */
+  source: string;
+  tags: string[];
+  createdAt: string;
+  updatedAt: string;
+  lastUsedAt: string;
+  hits: number;
+  pinned: boolean;
+  archived: boolean;
+}
+
+interface MemoryStats {
+  total: number;
+  archived: number;
+  pinned: number;
+  byKind: Record<string, number>;
+  oldest?: string | null;
+  newest?: string | null;
+  mostUsed: Array<{ id: string; content: string; hits: number }>;
+  file: string;
+}
+
+interface MindBeat {
+  thought: string;
+  line: string;
+  emotion: string;
+  script: Array<{ anim: string; dur: number; line: string }>;
+  importance: number;
+}
+
+interface MindResult {
+  ok: boolean;
+  beat?: MindBeat;
+  error?: string;
 }
 
 interface Window {

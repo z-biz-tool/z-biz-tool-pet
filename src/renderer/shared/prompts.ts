@@ -42,6 +42,13 @@ export const DEFAULT_CONFIG = {
   aiBaseUrl: OLLAMA_URL,
   aiModel: MODEL_NAME,
   providers: [],
+  // 心智层：留空复用主 provider。intervalSec 是两次自主活动之间的基准间隔，
+  // 120 秒是"她明显在活动"和"她太吵"之间的手感值。
+  mindEnabled: true,
+  mindUrl: '',
+  mindModel: '',
+  mindIntervalSec: 120,
+  autoExtractMemory: true,
 };
 
 /** 空状态建议问题 */

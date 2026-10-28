@@ -96,6 +96,22 @@ const PORTED: Record<string, { cmd: string; params?: string[] }> = {
   meetingEnd: { cmd: 'meeting_end' },
   meetingCancel: { cmd: 'meeting_cancel' },
   meetingGetState: { cmd: 'meeting_get_state' },
+
+  // 长期记忆（2026-10-28 v2：结构化 + 检索 + 注入）
+  memoryList: { cmd: 'memory_list', params: ['query', 'kind', 'limit'] },
+  memoryAdd: { cmd: 'memory_add', params: ['content', 'kind', 'key', 'confidence'] },
+  memoryUpdate: { cmd: 'memory_update', params: ['id', 'patch'] },
+  memoryDelete: { cmd: 'memory_delete', params: ['id'] },
+  memoryClear: { cmd: 'memory_clear', params: ['scope'] },
+  memoryStats: { cmd: 'memory_stats' },
+  memoryRecallPreview: { cmd: 'memory_recall_preview', params: ['query'] },
+
+  // 心智层（2026-10-28）：自主内心活动 + 日记 + 探活
+  mindBeat: { cmd: 'mind_beat', params: ['state'] },
+  mindDiary: { cmd: 'mind_diary', params: ['limit'] },
+  mindPing: { cmd: 'mind_ping' },
+  mindExtractNow: { cmd: 'mind_extract_now' },
+  mindBusy: { cmd: 'mind_busy' },
 };
 
 /** 事件订阅端点：channel 与 Electron 同名，Rust 一 emit 就自动接通 */

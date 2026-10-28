@@ -29,12 +29,14 @@ import {
   CustomerServiceOutlined,
   ArrowRightOutlined,
   LoadingOutlined,
+  BulbOutlined,
 } from '@ant-design/icons';
 import SettingsPanel from './SettingsPanel';
 import MeetingPanel from './MeetingPanel';
 import QuickCommandPanel from './QuickCommandPanel';
 import AchievementPanel from './AchievementPanel';
 import SceneryPanel from './SceneryPanel';
+import MemoryPanel from './MemoryPanel';
 import { DEFAULT_CONFIG, SUGGESTED_QUESTIONS } from '../shared/prompts';
 import { errorMessage } from '../shared/interaction';
 import { characterOf } from '../pet/characters';
@@ -162,6 +164,7 @@ function App() {
   const [quickCommandOpen, setQuickCommandOpen] = useState(false);
   const [achievementOpen, setAchievementOpen] = useState(false);
   const [sceneryOpen, setSceneryOpen] = useState(false);
+  const [memoryOpen, setMemoryOpen] = useState(false);
 
   /**
    * 右侧栏同一时刻只放一块内容：设置优先于会议。
@@ -872,6 +875,17 @@ function App() {
                 <SunOutlined />
               </button>
             </Tooltip>
+            <Tooltip title="她的记忆">
+              <button
+                type="button"
+                className={`adm-iconbtn ${memoryOpen ? 'is-active' : ''}`}
+                aria-label="她的记忆"
+                aria-pressed={memoryOpen}
+                onClick={() => setMemoryOpen((v) => !v)}
+              >
+                <BulbOutlined />
+              </button>
+            </Tooltip>
             <Tooltip title="会议实时转录">
               <button
                 type="button"
@@ -1160,6 +1174,7 @@ function App() {
           destroyOnHidden
         >
           <SceneryPanel open={sceneryOpen} onClose={() => setSceneryOpen(false)} />
+          <MemoryPanel open={memoryOpen} onClose={() => setMemoryOpen(false)} />
         </Modal>
       </div>
     </ConfigProvider>

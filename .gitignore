@@ -42,6 +42,9 @@ src-tauri/gen/
 # OS temp
 .tmp/
 
+# 立绘源图（1024×1536 原图不进仓，只提交加工后的 webp）
+.char-src/
+
 # 语音引擎构建产物与模型（录音临时文件在 ~/.z-bot/meetings，不在仓库里）
 whisper.cpp/*
 !whisper.cpp/README.md

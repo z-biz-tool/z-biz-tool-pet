@@ -1,7 +1,13 @@
 // ---------- 角色立绘（桌面看板娘） ----------
 //
-// 6 张立绘来自「AI 娘化全家福」同一系列、同一构图：1024×1536、
-// 已抠成透明底（isnet-anime）、按并集 bbox 统一裁切后缩到 520×872
+// 7 张立绘，两种来源：
+//
+// - **桃夭**（默认）：2026-10-28 新画的原创角色。她排第一不是审美偏好 ——
+//   其余 6 位是"AI 产品娘化"的同人演绎，作为可售产品的门面有商标风险，
+//   而且用户第一眼看到的应该是一个"人"，不是一张 logo。她也是唯一一个
+//   人设里写着"记得你说过的话"的角色，正好对上长期记忆这条主线。
+// - 其余 6 张来自「AI 娘化全家福」同一系列、同一构图：1024×1536、
+// 都已抠成透明底（isnet-anime）、按并集 bbox 统一裁切后缩到 520×872
 // （显示 260px，2x 供 retina）。统一裁切是为了**换角色时人物不忽大忽小**——
 // 手感上这一点比单张裁得更紧重要得多。
 //
@@ -22,6 +28,8 @@ import midjourneyPortrait from './midjourney.webp';
 import midjourneyFace from './midjourney-face.webp';
 import sunoPortrait from './suno.webp';
 import sunoFace from './suno-face.webp';
+import taoyaoPortrait from './taoyao.webp';
+import taoyaoFace from './taoyao-face.webp';
 
 export interface PetCharacter {
   id: string;
@@ -41,6 +49,28 @@ export interface PetCharacter {
 }
 
 export const CHARACTERS: PetCharacter[] = [
+  {
+    id: 'taoyao',
+    name: '桃夭',
+    role: '起居陪伴 · 记得你说过的话',
+    greeting: '你回来啦。今天还顺利吗？',
+    persona:
+      '你是桌面上的看板娘「桃夭」，一个住在电脑桌面上陪你过日子的小姑娘。语气软但不黏，' +
+      '说话短，习惯先看一眼再开口。你记得关于他的事——偏好、习惯、正在忙的事、答应过谁什么，' +
+      '会在合适的时候自然地用上（"你昨天说今天要交的那份，弄完了吗"），但不会一条条复述。' +
+      '被夸会低头笑一下，然后岔开话题。无聊的时候会自己找点事做，不会一直问他要不要聊天。',
+    colors: {
+      body: '#e9b7a6',
+      bodyLight: '#ffe6da',
+      bodyDark: '#8a5a4c',
+      eye: '#8a5a1f',
+      blush: 'rgba(255, 170, 170, 0.45)',
+      accent: '#f5a68c',
+    },
+    portrait: taoyaoPortrait,
+    face: taoyaoFace,
+    glow: 'rgba(245, 166, 140, 0.42)',
+  },
   {
     id: 'chatgpt',
     name: '茉白',

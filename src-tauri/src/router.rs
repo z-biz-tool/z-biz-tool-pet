@@ -19,7 +19,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager, WebviewWindow};
 use tokio::sync::oneshot;
 
-use crate::{actions, ai, limiter, memory, security, state, tools};
+use crate::{actions, ai, limiter, memory, mind, security, state, tools};
 
 const PET: &str = "pet";
 const ADMIN: &str = "admin";
@@ -401,6 +401,7 @@ fn last_message_text(messages: &[ai::Message]) -> String {
 }
 
 /// 对照 ai-router.ts 的 maybeExtractMemory：抽的是**请求**消息，不是回复。
+/// 这是零延迟的正则兜底路径；语义记忆交给 mind::extract_and_store（异步）。
 fn maybe_extract_memory(messages: &[ai::Message]) {
     let pairs: Vec<(&str, &str)> = messages
         .iter()
@@ -409,12 +410,80 @@ fn maybe_extract_memory(messages: &[ai::Message]) {
     memory::extract_from_conversation(&pairs);
 }
 
+/// 记忆闭环的「读」这一半：把检索到的记忆拼进 system prompt。
+///
+/// 这是 v2 之前缺的那一步 —— 记忆一直在写，但从来没有一次进过请求，
+/// 所以她永远"想不起来"。拼在 system 尾部而不是开头：人格设定在前，
+/// 记忆是补充材料，反了会让模型把记忆清单当成人设来演。
+fn inject_memory(req: &mut ai::ChatRequest) {
+    // 用最后一条 user 消息当检索 query：多轮对话里只有它代表"他现在关心什么"
+    let query = req
+        .messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .map(|m| m.content.clone())
+        .unwrap_or_default();
+    let Some(ctx) = memory::prompt_context(&query) else {
+        return;
+    };
+
+    match req.messages.iter_mut().find(|m| m.role == "system") {
+        Some(sys) => {
+            // 同一条请求可能被重试/重放，别叠两遍
+            if !sys.content.contains("你记得的关于他的事") {
+                if sys.content.trim().is_empty() {
+                    sys.content = ctx;
+                } else {
+                    sys.content = format!("{}\n\n{}", sys.content.trim_end(), ctx);
+                }
+            }
+        }
+        None => req.messages.insert(
+            0,
+            ai::Message {
+                role: "system".into(),
+                content: ctx,
+                images: None,
+            },
+        ),
+    }
+}
+
+/// 记忆闭环的「写」这一半（LLM 版）：每两轮抽一次，完全异步。
+///
+/// 放在 spawn 里而不是 await，是因为抽取要一次完整推理（本机小模型 2~8s），
+/// 挡在回复链路上等于让每次对话都多等几秒。抽失败也无所谓，下一轮窗口里
+/// 这些消息还在。
+fn spawn_extraction(cfg: &Value, messages: &[ai::Message]) {
+    if !mind::tick_turn() {
+        return;
+    }
+    let cfg = cfg.clone();
+    let turns: Vec<(String, String)> = messages
+        .iter()
+        .filter(|m| m.role == "user" || m.role == "assistant")
+        .map(|m| (m.role.clone(), m.content.clone()))
+        .collect();
+    if turns.is_empty() {
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        match mind::extract_and_store(&cfg, &turns).await {
+            Ok(0) => {}
+            Ok(n) => println!("[Mind] 记住 {n} 条"),
+            Err(e) => println!("[Mind] 抽取跳过: {e}"),
+        }
+    });
+}
+
 /// 补上模型解析与工具定义注入，与 Electron 的 `{...request, model, tools}` 同一步
 fn equipped(mut req: ai::ChatRequest, cfg: &Value, provider: &ai::Provider) -> ai::ChatRequest {
     req.model = ai::resolve_model(&req.model, cfg, provider);
     if provider.supports_tools {
         req.tools = Some(tools::tool_definitions());
     }
+    inject_memory(&mut req);
     req
 }
 
@@ -474,10 +543,12 @@ async fn chat_inner(app: &AppHandle, request: Value) -> Result<Value, String> {
         let (results, final_response) =
             run_tool_calls(app, &provider, &original, &req.model, &response, None).await?;
         maybe_extract_memory(&original);
+        spawn_extraction(&cfg, &original);
         return Ok(with_tools(&final_response, &response.tool_calls, &results));
     }
 
     maybe_extract_memory(&original);
+    spawn_extraction(&cfg, &original);
     serde_json::to_value(&response).map_err(|e| e.to_string())
 }
 
@@ -575,10 +646,12 @@ async fn stream_inner(
         )
         .await?;
         maybe_extract_memory(&original);
+        spawn_extraction(&cfg, &original);
         return Ok(with_tools(&final_response, &response.tool_calls, &results));
     }
 
     maybe_extract_memory(&original);
+    spawn_extraction(&cfg, &original);
     serde_json::to_value(&response).map_err(|e| e.to_string())
 }
 
@@ -644,6 +717,80 @@ pub fn reset_for_tests() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 记忆闭环最关键的一条：**记忆必须真的进到请求里**。
+    ///
+    /// v1 的整份代码看起来什么都有 —— 抽取、落盘、去重 —— 唯独没有这一条，
+    /// 结果"长期记忆"跑了两个版本从没起过作用。这条测试就是防止它再退回去：
+    /// 断言的不是函数返回值，而是最终发给模型的 system 消息里有没有那句话。
+    #[test]
+    fn memory_gets_injected_into_the_system_prompt() {
+        let _g = crate::lock_test_env();
+        let dir = std::env::temp_dir().join(format!("z-bot-router-{}", uuid::Uuid::new_v4()));
+        std::env::set_var("ZBOT_DATA_DIR", &dir);
+        crate::store::invalidate(&memory::memory_file());
+        let _ = std::fs::remove_dir_all(&dir);
+        memory::init();
+        memory::upsert("person", "怎么称呼他", "叫他老板", "", 100, "manual", &[]);
+        memory::flush_now();
+
+        let mut req = ai::ChatRequest {
+            messages: vec![
+                ai::Message { role: "system".into(), content: "你是桃夭。".into(), images: None },
+                ai::Message { role: "user".into(), content: "老板今天开会吗".into(), images: None },
+            ],
+            model: String::new(),
+            stream: None,
+            tools: None,
+        };
+        inject_memory(&mut req);
+
+        let sys = req
+            .messages
+            .iter()
+            .find(|m| m.role == "system")
+            .map(|m| m.content.clone())
+            .unwrap_or_default();
+        assert!(sys.starts_with("你是桃夭。"), "人格必须在前，记忆是补充材料");
+        assert!(sys.contains("你记得的关于他的事"), "记忆块没拼进去: {sys}");
+        assert!(sys.contains("叫他老板"), "命中的记忆内容丢了: {sys}");
+
+        // 同一个请求被重放时不能叠两遍
+        inject_memory(&mut req);
+        let sys2 = &req.messages[0].content;
+        assert_eq!(sys2.matches("你记得的关于他的事").count(), 1, "重复注入了: {sys2}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+        std::env::remove_var("ZBOT_DATA_DIR");
+    }
+
+    /// 一条记忆都对不上时，一个字都不该加 —— 空记忆塞一段"你没有记忆"只会污染 prompt
+    #[test]
+    fn empty_recall_leaves_the_prompt_untouched() {
+        let _g = crate::lock_test_env();
+        let dir = std::env::temp_dir().join(format!("z-bot-router-{}", uuid::Uuid::new_v4()));
+        std::env::set_var("ZBOT_DATA_DIR", &dir);
+        crate::store::invalidate(&memory::memory_file());
+        let _ = std::fs::remove_dir_all(&dir);
+        memory::init();
+
+        let mut req = ai::ChatRequest {
+            messages: vec![ai::Message {
+                role: "user".into(),
+                content: "今天天气怎么样".into(),
+                images: None,
+            }],
+            model: String::new(),
+            stream: None,
+            tools: None,
+        };
+        inject_memory(&mut req);
+        assert_eq!(req.messages.len(), 1, "不该凭空插一条 system");
+        assert_eq!(req.messages[0].content, "今天天气怎么样");
+
+        let _ = std::fs::remove_dir_all(&dir);
+        std::env::remove_var("ZBOT_DATA_DIR");
+    }
 
     #[test]
     fn confirmation_gate_matches_electron_risk_table() {

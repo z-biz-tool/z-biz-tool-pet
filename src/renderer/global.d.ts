@@ -27,6 +27,13 @@ interface PetConfig {
   interruptThreshold?: number;
   sttModel?: string;
   shortcuts?: Record<string, string>;
+  /** ---- 心智层（2026-10-28）：记忆抽取与自主内心的模型来源 ----
+   *  mindUrl 留空 = 复用主对话 provider；填了就用这台机器跑杂活，省显存。 */
+  mindEnabled?: boolean;
+  mindUrl?: string;
+  mindModel?: string;
+  mindIntervalSec?: number;
+  autoExtractMemory?: boolean;
 }
 
 interface AIProvider {

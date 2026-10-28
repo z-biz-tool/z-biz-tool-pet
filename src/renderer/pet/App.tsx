@@ -18,6 +18,14 @@ import {
   getSkinById,
 } from './characters';
 import { CompanionEngine, DEFAULT_CFG, type CompanionSnapshot } from './companion/engine';
+import {
+  AutonomyDirector,
+  DEFAULT_AUTONOMY,
+  readConfig as readAutonomyConfig,
+  snapshotForMind,
+  type AutonomyConfig,
+  type SayCue,
+} from './companion/autonomy';
 import type { SceneCue } from './companion/lines';
 import {
   Emotion,
@@ -166,6 +174,7 @@ function App() {
   const [companionSay, setCompanionSay] = useState<{ text: string; nonce: number } | null>(null);
   const [companionSnap, setCompanionSnap] = useState<CompanionSnapshot>({
     mode: 'normal',
+    idleMs: 0,
     remainMs: 0,
     totalMs: 0,
     paused: false,
@@ -174,11 +183,13 @@ function App() {
   const [careMenuOpen, setCareMenuOpen] = useState(false);
   const [companionMenuOpen, setCompanionMenuOpen] = useState(false);
   const [companionCfg, setCompanionCfg] = useState({ ...DEFAULT_CFG });
+  const [autonomyCfg, setAutonomyCfg] = useState<AutonomyConfig>(() => readAutonomyConfig());
   const [petScale, setPetScale] = useState(() => {
     const raw = Number(localStorage.getItem(SCALE_KEY));
     return Number.isFinite(raw) && raw > 0 ? clampScale(raw) : 1;
   });
   const companionRef = useRef<CompanionEngine | null>(null);
+  const autonomyRef = useRef<AutonomyDirector | null>(null);
   const sayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const petScaleRef = useRef(petScale);
   petScaleRef.current = petScale;
@@ -978,6 +989,8 @@ function App() {
   // 原来的单击直接开麦，等于把最重的功能挂在最容易被误触的手势上。
   const handlePointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
+    // 用户碰她 = 脚本让位：不打断的话她自己的动作会在两秒后顶掉刚回的话
+    autonomyRef.current?.interrupt();
     const p = pressRef.current;
     p.downAt = Date.now();
     p.recording = false;
@@ -1223,6 +1236,66 @@ function App() {
       }
     };
   }, [handleCompanionSay, flashHint]);
+
+  // ---------- 自主行为导演 ----------
+  /**
+   * 她「自己演」的出口。和陪伴引擎共用同一个气泡/动画通道，所以不会互相顶掉：
+   * 陪伴引擎负责"该提醒了"，导演负责"这段时间她在干嘛"。
+   *
+   * 空文本是合法输入 —— 脚本里很多步是纯动作（走过去、探头、缩回去），
+   * 那些步骤不该让气泡闪一下，但动画必须播。
+   */
+  const handleAutonomyCue = useCallback(
+    (text: string, cue: SayCue) => {
+      if (text) {
+        handleCompanionSay(text, { anim: cue.anim, emotion: cue.emotion, ms: cue.ms });
+        return;
+      }
+      if (cue.anim) triggerAnimationRef.current?.(cue.anim, 'idle');
+      if (cue.emotion) setCurrentEmotion(cue.emotion);
+    },
+    [handleCompanionSay]
+  );
+
+  useEffect(() => {
+    const director = new AutonomyDirector(
+      {
+        say: handleAutonomyCue,
+        getStatus: () => statusRef.current,
+        getState: () => {
+          const snap = companionRef.current?.getSnapshot();
+          const s = petStatsRef.current;
+          return snapshotForMind({
+            idleMs: snap?.idleMs ?? 0,
+            mode: snap?.mode ?? 'normal',
+            focusMinutes: snap?.stat.focusMinutes ?? 0,
+            affection: s.affection,
+            energy: s.energy,
+          });
+        },
+        log,
+      },
+      autonomyCfg
+    );
+    autonomyRef.current = director;
+    setAutonomyCfg(director.getConfig());
+    director.start();
+
+    return () => {
+      director.stop();
+      autonomyRef.current = null;
+    };
+    // autonomyCfg 只在初始化时读一次：之后由 updateConfig 推给导演，
+    // 放进依赖会让每次改设置都重建导演、重置她的节奏
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [handleAutonomyCue]);
+
+  const patchAutonomyCfg = useCallback((patch: Partial<AutonomyConfig>) => {
+    const next = autonomyRef.current?.updateConfig(patch) ?? { ...DEFAULT_AUTONOMY, ...patch };
+    setAutonomyCfg(next);
+    if (patch.enabled === false) flashHint('她已经安静下来了', 2200);
+    if (patch.enabled === true) flashHint('她会自己找点事做了', 2200);
+  }, [flashHint]);
 
   useEffect(() => {
     window.addEventListener('mousemove', handleMouseMove);
@@ -1648,6 +1721,12 @@ function App() {
                   onClick={() => patchCompanionCfg({ focusMinutes: 50 })}
                 >
                   {companionCfg.focusMinutes === 50 ? '✓' : '　'} 默认专注 50 分钟
+                </div>
+                <div
+                  className={`submenu-item ${autonomyCfg.enabled ? 'active' : ''}`}
+                  onClick={() => patchAutonomyCfg({ enabled: !autonomyCfg.enabled })}
+                >
+                  {autonomyCfg.enabled ? '✓' : '　'} 自己活动（会想事情）
                 </div>
                 <div
                   className="submenu-item"
