@@ -186,13 +186,23 @@ mod tests {
     #[test]
     fn presets_match_the_renderer_characters() {
         let skins = pet_get_skins().as_array().expect("必须是数组").clone();
-        assert_eq!(skins.len(), 7, "7 个立绘角色，多一个少一个都会让 id 对不上立绘");
+        assert_eq!(
+            skins.len(),
+            7,
+            "7 个立绘角色，多一个少一个都会让 id 对不上立绘"
+        );
         // id 顺序与 characters/index.ts 完全一致：渲染层按数组顺序渲染换角色菜单
         let ids: Vec<&str> = skins.iter().filter_map(|s| s["id"].as_str()).collect();
         assert_eq!(
             ids,
             vec![
-                "taoyao", "chatgpt", "claude", "gemini", "deepseek", "midjourney", "suno",
+                "taoyao",
+                "chatgpt",
+                "claude",
+                "gemini",
+                "deepseek",
+                "midjourney",
+                "suno",
             ]
         );
         // 默认角色必须是原创的桃夭，而不是任何 AI 产品的娘化形象

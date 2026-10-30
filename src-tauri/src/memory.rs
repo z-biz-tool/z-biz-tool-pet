@@ -261,10 +261,10 @@ fn is_cjk(c: char) -> bool {
 
 /// 高频繁虚词 2-gram：不滤掉的话"我的""你的"能让任意两条记忆互相关联
 const STOP_BIGRAMS: &[&str] = &[
-    "我的", "你的", "他的", "她的", "我们", "你们", "他们", "是一", "一个", "这个", "那个",
-    "什么", "没有", "可以", "就是", "不是", "了吗", "的话", "知道", "觉得", "现在", "今天",
-    "时候", "这样", "那样", "怎么", "因为", "所以", "但是", "如果", "已经", "还是", "应该",
-    "起来", "出来", "有点", "一些", "然后", "而且", "或者", "自己", "东西", "事情",
+    "我的", "你的", "他的", "她的", "我们", "你们", "他们", "是一", "一个", "这个", "那个", "什么",
+    "没有", "可以", "就是", "不是", "了吗", "的话", "知道", "觉得", "现在", "今天", "时候", "这样",
+    "那样", "怎么", "因为", "所以", "但是", "如果", "已经", "还是", "应该", "起来", "出来", "有点",
+    "一些", "然后", "而且", "或者", "自己", "东西", "事情",
 ];
 
 fn push_cjk_run(run: &mut Vec<char>, out: &mut HashSet<String>) {
@@ -445,7 +445,8 @@ pub fn upsert(
             if m.pinned {
                 continue;
             }
-            let s = (m.confidence as f64) / 100.0 + (-days_since(&m.updated_at, now_i) / 90.0).exp();
+            let s =
+                (m.confidence as f64) / 100.0 + (-days_since(&m.updated_at, now_i) / 90.0).exp();
             if s < worst {
                 worst = s;
                 idx = i;
@@ -604,12 +605,15 @@ pub fn stats() -> Value {
     let live: Vec<&Memory> = t.items.iter().filter(|m| !m.archived).collect();
     let mut by_kind = serde_json::Map::new();
     for k in KINDS {
-        by_kind.insert(k.to_string(), json!(live.iter().filter(|m| m.kind == k).count()));
+        by_kind.insert(
+            k.to_string(),
+            json!(live.iter().filter(|m| m.kind == k).count()),
+        );
     }
     let oldest = live.iter().map(|m| m.created_at.clone()).min();
     let newest = live.iter().map(|m| m.created_at.clone()).max();
     let mut sorted = live.clone();
-    sorted.sort_by(|a, b| b.hits.cmp(&a.hits));
+    sorted.sort_by_key(|m| std::cmp::Reverse(m.hits));
     let top: Vec<Value> = sorted
         .iter()
         .take(3)
@@ -723,7 +727,11 @@ pub fn extract_from_conversation(messages: &[(&str, &str)]) {
 // ---------- Tauri 命令 ----------
 
 #[tauri::command]
-pub fn memory_list(query: Option<String>, kind: Option<String>, limit: Option<usize>) -> Vec<Memory> {
+pub fn memory_list(
+    query: Option<String>,
+    kind: Option<String>,
+    limit: Option<usize>,
+) -> Vec<Memory> {
     let cap = limit.unwrap_or(200).clamp(1, MAX_ENTRIES);
     let q = query.unwrap_or_default();
     let want = kind.unwrap_or_default();
@@ -947,7 +955,15 @@ mod tests {
         let _g = crate::lock_test_env();
         let dir = fresh();
 
-        upsert("preference", "咖啡", "喜欢喝冰美式，不加糖", "", 80, "llm", &[]);
+        upsert(
+            "preference",
+            "咖啡",
+            "喜欢喝冰美式，不加糖",
+            "",
+            80,
+            "llm",
+            &[],
+        );
         upsert("fact", "生日", "1995 年 3 月 7 日", "", 90, "manual", &[]);
         upsert("plan", "旅行", "下个月想去北海道看雪", "", 70, "llm", &[]);
 
@@ -999,7 +1015,15 @@ mod tests {
         let dir = fresh();
         for i in 0..40 {
             let long = "很长的记忆内容".repeat(6);
-            upsert("fact", &format!("条目{i}"), &format!("{long}{i}"), "", 90, "llm", &[]);
+            upsert(
+                "fact",
+                &format!("条目{i}"),
+                &format!("{long}{i}"),
+                "",
+                90,
+                "llm",
+                &[],
+            );
         }
         let ctx = prompt_context("很长的记忆内容").unwrap();
         assert!(

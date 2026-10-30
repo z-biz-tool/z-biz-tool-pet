@@ -30,14 +30,24 @@ use crate::{memory, state};
 /// 动作白名单：必须与前端 animations.ts 的 AnimationType 完全一致，
 /// 模型编出来的动作在这里被过滤掉，否则播放器拿到未知 key 会静默不动。
 pub const ACTIONS: [&str; 16] = [
-    "idle", "float", "walk", "dance", "roll", "jump", "wiggle", "stretch", "spin", "yawn",
-    "sleep", "chase", "blink", "bounce", "shake", "wobble",
+    "idle", "float", "walk", "dance", "roll", "jump", "wiggle", "stretch", "spin", "yawn", "sleep",
+    "chase", "blink", "bounce", "shake", "wobble",
 ];
 
 /// 情绪白名单：必须是 shared/emotions.ts 里的 key
 pub const EMOTIONS: [&str; 12] = [
-    "happy", "cute", "shy", "sleepy", "playful", "proud", "loving", "thinking", "excited",
-    "tsundere", "comforting", "neutral",
+    "happy",
+    "cute",
+    "shy",
+    "sleepy",
+    "playful",
+    "proud",
+    "loving",
+    "thinking",
+    "excited",
+    "tsundere",
+    "comforting",
+    "neutral",
 ];
 
 // 超时给得宽，是因为这两件事都在后台跑，用户感觉不到"等"：
@@ -169,7 +179,9 @@ fn cfg_str(cfg: &Value, key: &str) -> String {
 }
 
 fn enabled(cfg: &Value) -> bool {
-    cfg.get("mindEnabled").and_then(|v| v.as_bool()).unwrap_or(true)
+    cfg.get("mindEnabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true)
 }
 
 /// 心智专用 provider。mindUrl 为空时整体复用主对话 provider ——
@@ -274,7 +286,11 @@ pub fn normalize_base(raw: &str) -> (String, Wire) {
     ] {
         if let Some(b) = u.strip_suffix(suffix) {
             // OpenAI 系剥掉 /v1，端点拼接时再加回去
-            let b = if wire == Wire::Openai { b.trim_end_matches("/v1") } else { b };
+            let b = if wire == Wire::Openai {
+                b.trim_end_matches("/v1")
+            } else {
+                b
+            };
             return (b.to_string(), wire);
         }
     }
@@ -318,8 +334,16 @@ struct CallError {
     not_found: bool,
 }
 
-async fn post_chat(endpoint: &str, body: &Value, budget: Duration) -> Result<(u16, String), String> {
-    let call = http().post(endpoint).header("Content-Type", "application/json").json(body).send();
+async fn post_chat(
+    endpoint: &str,
+    body: &Value,
+    budget: Duration,
+) -> Result<(u16, String), String> {
+    let call = http()
+        .post(endpoint)
+        .header("Content-Type", "application/json")
+        .json(body)
+        .send();
     let resp = match tokio::time::timeout(budget, call).await {
         Ok(Ok(r)) => r,
         Ok(Err(e)) => return Err(format!("心智模型连不上（{endpoint}）：{e}")),
@@ -383,9 +407,15 @@ async fn ollama_complete(r: &Req<'_>) -> Result<String, CallError> {
 
     let (code, text) = post_chat(&endpoint, &body, r.budget)
         .await
-        .map_err(|e| CallError { msg: e, not_found: false })?;
+        .map_err(|e| CallError {
+            msg: e,
+            not_found: false,
+        })?;
     if !(200..300).contains(&code) {
-        return Err(CallError { msg: http_error(code, &text), not_found: code == 404 });
+        return Err(CallError {
+            msg: http_error(code, &text),
+            not_found: code == 404,
+        });
     }
     let data: Value = serde_json::from_str(&text).map_err(|e| CallError {
         msg: format!("心智模型返回的不是 JSON（{e}）：{}", head(&text, 160)),
@@ -467,10 +497,18 @@ fn parse_openai(code: u16, text: &str) -> Result<String, String> {
     if !(200..300).contains(&code) {
         return Err(http_error(code, text));
     }
-    let data: Value =
-        serde_json::from_str(text).map_err(|e| format!("心智模型返回的不是 JSON（{e}）：{}", head(text, 160)))?;
-    let msg = data.pointer("/choices/0/message").cloned().unwrap_or(Value::Null);
-    let content = msg.get("content").and_then(|c| c.as_str()).unwrap_or("").trim().to_string();
+    let data: Value = serde_json::from_str(text)
+        .map_err(|e| format!("心智模型返回的不是 JSON（{e}）：{}", head(text, 160)))?;
+    let msg = data
+        .pointer("/choices/0/message")
+        .cloned()
+        .unwrap_or(Value::Null);
+    let content = msg
+        .get("content")
+        .and_then(|c| c.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
     if !content.is_empty() {
         return Ok(content);
     }
@@ -494,7 +532,9 @@ async fn chat_complete(r: &Req<'_>, wire: Wire) -> Result<String, String> {
         // 404 = 这个地址根本不是 ollama。llama.cpp / vLLM / LM Studio
         // 对 /api/chat 一致地秒回 404（实测 0.01s），是干净的探测信号。
         Wire::Ollama => match ollama_complete(r).await {
-            Err(CallError { not_found: true, .. }) => {
+            Err(CallError {
+                not_found: true, ..
+            }) => {
                 remember_wire(r.base, Wire::Openai);
                 openai_complete(r).await
             }
@@ -533,14 +573,31 @@ async fn complete(
         if model.is_empty() && wire == Wire::Ollama {
             return Err("没有可用的心智模型，请先在设置里选一个".into());
         }
-        let req = Req { base: &base, model: &model, system, user, budget, temperature, max_tokens, schema };
+        let req = Req {
+            base: &base,
+            model: &model,
+            system,
+            user,
+            budget,
+            temperature,
+            max_tokens,
+            schema,
+        };
         return chat_complete(&req, wire).await;
     }
 
     let req = ChatRequest {
         messages: vec![
-            Message { role: "system".into(), content: system.into(), images: None },
-            Message { role: "user".into(), content: user.into(), images: None },
+            Message {
+                role: "system".into(),
+                content: system.into(),
+                images: None,
+            },
+            Message {
+                role: "user".into(),
+                content: user.into(),
+                images: None,
+            },
         ],
         model,
         stream: None,
@@ -644,7 +701,7 @@ fn sanitize_emotion(e: &str) -> String {
 /// 每 N 轮返回 true。由 router 在每次 chat 后问一次。
 pub fn tick_turn() -> bool {
     let n = turn_counter().fetch_add(1, Ordering::Relaxed) + 1;
-    n % EXTRACT_EVERY == 0
+    n.is_multiple_of(EXTRACT_EVERY)
 }
 
 /// 从最近的对话里抽记忆 + 生成一段摘要。返回新写入的条数。
@@ -671,7 +728,13 @@ pub async fn extract_and_store(cfg: &Value, turns: &[(String, String)]) -> Resul
     if window.is_empty() {
         return Ok(0);
     }
-    let tail: Vec<&(String, String)> = window.iter().rev().take(EXTRACT_WINDOW).rev().copied().collect();
+    let tail: Vec<&(String, String)> = window
+        .iter()
+        .rev()
+        .take(EXTRACT_WINDOW)
+        .rev()
+        .copied()
+        .collect();
     let user_chars: usize = tail
         .iter()
         .filter(|(r, _)| r == "user")
@@ -734,11 +797,21 @@ pub async fn extract_and_store(cfg: &Value, turns: &[(String, String)]) -> Resul
     if !claim() {
         return Ok(0);
     }
-    let raw = complete(cfg, &system, &transcript, EXTRACT_TIMEOUT, 0.3, 900, Some(&extract_schema())).await;
+    let raw = complete(
+        cfg,
+        &system,
+        &transcript,
+        EXTRACT_TIMEOUT,
+        0.3,
+        900,
+        Some(&extract_schema()),
+    )
+    .await;
     release();
 
     let raw = raw?;
-    let parsed = extract_json(&raw).ok_or_else(|| format!("模型返回的不是 JSON：{}", head(&raw, 120)))?;
+    let parsed =
+        extract_json(&raw).ok_or_else(|| format!("模型返回的不是 JSON：{}", head(&raw, 120)))?;
 
     // 反幻觉闸门：模型会"顺嘴"补出对话里根本没有的信息 ——
     // 实测在一段讲述职和开会的对话里，它抽出了「喜欢冰美式不加糖」。
@@ -896,7 +969,12 @@ fn situation(cfg: &Value, state_in: &Value) -> String {
     } else {
         let lines: Vec<String> = diary
             .iter()
-            .map(|d| format!("- {}", d.get("content").and_then(|v| v.as_str()).unwrap_or("")))
+            .map(|d| {
+                format!(
+                    "- {}",
+                    d.get("content").and_then(|v| v.as_str()).unwrap_or("")
+                )
+            })
             .collect();
         format!("\n你最近记下的：\n{}", lines.join("\n"))
     };
@@ -942,7 +1020,16 @@ async fn reflect_inner(cfg: &Value, state_in: Value) -> Result<Beat, String> {
          只输出 JSON 数组，不要解释：\n\
          [{{\"thought\":\"内心OS ≤30字\",\"line\":\"说出口的一句 ≤20字，可以空字符串\",\"action\":\"动作\",\"emotion\":\"情绪\"}}]"
     );
-    let raw_a = complete(cfg, &sys_a, "现在你脑子里冒出什么？", REFLECT_TIMEOUT, 0.9, 600, Some(&thoughts_schema())).await?;
+    let raw_a = complete(
+        cfg,
+        &sys_a,
+        "现在你脑子里冒出什么？",
+        REFLECT_TIMEOUT,
+        0.9,
+        600,
+        Some(&thoughts_schema()),
+    )
+    .await?;
     let cands = extract_json(&raw_a).ok_or_else(|| "第一阶段的念头不是 JSON".to_string())?;
     let arr = cands
         .as_array()
@@ -962,7 +1049,9 @@ async fn reflect_inner(cfg: &Value, state_in: Value) -> Result<Beat, String> {
                 "{}. 内心：{}｜想说：{}｜动作：{}｜情绪：{}",
                 i + 1,
                 c.get("thought").and_then(|v| v.as_str()).unwrap_or(""),
-                c.get("line").and_then(|v| v.as_str()).unwrap_or("（不出声）"),
+                c.get("line")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("（不出声）"),
                 c.get("action").and_then(|v| v.as_str()).unwrap_or("idle"),
                 c.get("emotion").and_then(|v| v.as_str()).unwrap_or("happy"),
             )
@@ -989,7 +1078,17 @@ async fn reflect_inner(cfg: &Value, state_in: Value) -> Result<Beat, String> {
     );
     // 第二阶段失败不致命：发散出来的念头本身就是一次完整的内心活动，
     // 拿第一个候选直接播就是了 —— 总比"她想了一下又什么都没做"好。
-    let picked = match complete(cfg, &sys_b, "选吧。", REFLECT_TIMEOUT, 0.6, 500, Some(&script_schema())).await {
+    let picked = match complete(
+        cfg,
+        &sys_b,
+        "选吧。",
+        REFLECT_TIMEOUT,
+        0.6,
+        500,
+        Some(&script_schema()),
+    )
+    .await
+    {
         Ok(raw) => extract_json(&raw),
         Err(e) => {
             println!("[Mind] 第二阶段失败，用首选念头兜底：{e}");
@@ -1030,7 +1129,10 @@ async fn reflect_inner(cfg: &Value, state_in: Value) -> Result<Beat, String> {
     if script.is_empty() {
         script.push(Cue {
             anim: sanitize_action(
-                fallback.get("action").and_then(|v| v.as_str()).unwrap_or("idle"),
+                fallback
+                    .get("action")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("idle"),
             ),
             dur: 1800,
             line: String::new(),
@@ -1046,7 +1148,7 @@ async fn reflect_inner(cfg: &Value, state_in: Value) -> Result<Beat, String> {
     };
 
     let line = {
-        let l = str_of(&picked, "line");
+        let l = str_of(picked, "line");
         if l.is_empty() {
             str_of(fallback, "line")
         } else {
@@ -1054,7 +1156,7 @@ async fn reflect_inner(cfg: &Value, state_in: Value) -> Result<Beat, String> {
         }
     };
     let thought = {
-        let t = str_of(&picked, "thought");
+        let t = str_of(picked, "thought");
         if t.is_empty() {
             str_of(fallback, "thought")
         } else {
@@ -1062,7 +1164,7 @@ async fn reflect_inner(cfg: &Value, state_in: Value) -> Result<Beat, String> {
         }
     };
     let emotion = sanitize_emotion(&{
-        let e = str_of(&picked, "emotion");
+        let e = str_of(picked, "emotion");
         if e.is_empty() {
             str_of(fallback, "emotion")
         } else {
@@ -1127,15 +1229,7 @@ pub fn remember_beat(beat: &Beat) {
     } else {
         format!("{}（心里想：{}）", beat.line, beat.thought)
     };
-    memory::upsert(
-        "event",
-        &key,
-        &content,
-        "",
-        beat.importance,
-        "episode",
-        &[],
-    );
+    memory::upsert("event", &key, &content, "", beat.importance, "episode", &[]);
 }
 
 // ---------- 命令 ----------
@@ -1170,9 +1264,22 @@ pub async fn mind_ping() -> Value {
     let p = provider(&cfg);
     let model = model_for(&p, &cfg);
     let (base, inferred) = normalize_base(&p.base_url);
-    let guessed = if p.ptype == "ollama" { resolve_wire(&cfg, &base, inferred) } else { inferred };
+    let guessed = if p.ptype == "ollama" {
+        resolve_wire(&cfg, &base, inferred)
+    } else {
+        inferred
+    };
     let started = Instant::now();
-    let probe = complete(&cfg, "只回复两个字：在的", "在吗", Duration::from_secs(15), 0.2, 24, None).await;
+    let probe = complete(
+        &cfg,
+        "只回复两个字：在的",
+        "在吗",
+        Duration::from_secs(15),
+        0.2,
+        24,
+        None,
+    )
+    .await;
     let ms = started.elapsed().as_millis() as u64;
     // 探测后实际用的协议（第一次调用可能已经从 ollama 翻到 openai 了）
     let used = cached_wire(&base).map(|w| w.as_str().to_string());
@@ -1261,10 +1368,22 @@ mod tests {
     #[test]
     fn normalize_base_hands_out_protocol_and_base() {
         // 用户会把端点整条粘进去，也只填个 host —— 两种都得能用
-        assert_eq!(normalize_base("http://x:11434"), ("http://x:11434".into(), Wire::Ollama));
-        assert_eq!(normalize_base("http://x:11434/api"), ("http://x:11434".into(), Wire::Ollama));
-        assert_eq!(normalize_base("http://x:11434/api/chat"), ("http://x:11434".into(), Wire::Ollama));
-        assert_eq!(normalize_base("http://x:52741/v1"), ("http://x:52741".into(), Wire::Openai));
+        assert_eq!(
+            normalize_base("http://x:11434"),
+            ("http://x:11434".into(), Wire::Ollama)
+        );
+        assert_eq!(
+            normalize_base("http://x:11434/api"),
+            ("http://x:11434".into(), Wire::Ollama)
+        );
+        assert_eq!(
+            normalize_base("http://x:11434/api/chat"),
+            ("http://x:11434".into(), Wire::Ollama)
+        );
+        assert_eq!(
+            normalize_base("http://x:52741/v1"),
+            ("http://x:52741".into(), Wire::Openai)
+        );
         assert_eq!(
             normalize_base("http://x:52741/v1/chat/completions"),
             ("http://x:52741".into(), Wire::Openai)
@@ -1277,7 +1396,10 @@ mod tests {
             normalize_base("  http://x:8000/openai/v1/chat/completions "),
             ("http://x:8000/openai".into(), Wire::Openai)
         );
-        assert_eq!(normalize_base(" https://api.x.com "), ("https://api.x.com".into(), Wire::Ollama));
+        assert_eq!(
+            normalize_base(" https://api.x.com "),
+            ("https://api.x.com".into(), Wire::Ollama)
+        );
     }
 
     #[test]
@@ -1296,15 +1418,24 @@ mod tests {
     #[test]
     fn manual_protocol_override_beats_guess_but_only_for_the_mind_endpoint() {
         let own = json!({"mindUrl": "http://x:11434", "mindProtocol": "openai"});
-        assert_eq!(resolve_wire(&own, "http://x:11434", Wire::Ollama), Wire::Openai);
+        assert_eq!(
+            resolve_wire(&own, "http://x:11434", Wire::Ollama),
+            Wire::Openai
+        );
 
         let own = json!({"mindUrl": "http://x:52741", "mindProtocol": "ollama"});
-        assert_eq!(resolve_wire(&own, "http://x:52741", Wire::Openai), Wire::Ollama);
+        assert_eq!(
+            resolve_wire(&own, "http://x:52741", Wire::Openai),
+            Wire::Ollama
+        );
 
         // mindUrl 留空 = 复用主 provider：这时心智的协议设置不许插手，
         // 否则用户只想给自建端点指定协议，却把主对话的 ollama 也带偏了。
         let reuse = json!({"mindUrl": "", "mindProtocol": "openai", "ollamaUrl": "http://x:11434"});
-        assert_eq!(resolve_wire(&reuse, "http://x:11434", Wire::Ollama), Wire::Ollama);
+        assert_eq!(
+            resolve_wire(&reuse, "http://x:11434", Wire::Ollama),
+            Wire::Ollama
+        );
     }
 
     #[test]
@@ -1312,7 +1443,10 @@ mod tests {
         remember_wire("http://x:9999", Wire::Openai);
         let cfg = json!({"mindUrl": "http://x:9999", "mindProtocol": "auto"});
         // 地址长得像 ollama（没 /v1），但探测已经证明它是 OpenAI 兼容端
-        assert_eq!(resolve_wire(&cfg, "http://x:9999", Wire::Ollama), Wire::Openai);
+        assert_eq!(
+            resolve_wire(&cfg, "http://x:9999", Wire::Ollama),
+            Wire::Openai
+        );
     }
 
     #[test]
@@ -1320,7 +1454,10 @@ mod tests {
         // "Compute error" 原样抛给用户等于什么都没说。实测 Metal 后端显存不足后
         // 会卡死在错误态，所有请求 0.02s 秒回 500 —— 重试、改配置都没用。
         let e500 = http_error(500, "{\"error\":{\"message\":\"Compute error.\"}}");
-        assert!(e500.contains("重启"), "500 必须指出重启那台机器的服务：{e500}");
+        assert!(
+            e500.contains("重启"),
+            "500 必须指出重启那台机器的服务：{e500}"
+        );
         assert!(e500.contains("重试无效"), "必须打消重试的念头：{e500}");
         assert!(e500.contains("Compute error"), "原始信息要保留：{e500}");
 
@@ -1365,12 +1502,16 @@ mod tests {
     #[tokio::test]
     #[ignore = "需要局域网内跑着 ollama 的机器"]
     async fn mind_live_extract_and_reflect() {
-        let _g = crate::lock_test_env();
         let dir = std::env::temp_dir().join(format!("z-bot-live-{}", uuid::Uuid::new_v4()));
-        std::env::set_var("ZBOT_DATA_DIR", &dir);
-        let _ = std::fs::remove_dir_all(&dir);
-        crate::store::invalidate(&memory::memory_file());
-        memory::init();
+        // 锁只用来护「改进程级环境变量」这一小段；跨 await 持锁会让并发测试互相堵死
+        // （clippy::await_holding_lock）。设好目录就释放，后面的网络调用不再需要它。
+        {
+            let _g = crate::lock_test_env();
+            std::env::set_var("ZBOT_DATA_DIR", &dir);
+            let _ = std::fs::remove_dir_all(&dir);
+            crate::store::invalidate(&memory::memory_file());
+            memory::init();
+        }
 
         let url = std::env::var("ZBOT_MIND_URL").expect("需要 ZBOT_MIND_URL");
         let model = std::env::var("ZBOT_MIND_MODEL").unwrap_or_else(|_| "qwen3:8b".into());
@@ -1384,9 +1525,18 @@ mod tests {
 
         // ---- 抽取 ----
         let turns = vec![
-            ("user".to_string(), "我们公司这周四要述职，我负责讲增长那块，PPT 还差三页".to_string()),
-            ("assistant".to_string(), "增长那块你打算讲哪几个指标？".to_string()),
-            ("user".to_string(), "DAU 和留存吧。对了以后开会都别给我排早上九点，我起不来".to_string()),
+            (
+                "user".to_string(),
+                "我们公司这周四要述职，我负责讲增长那块，PPT 还差三页".to_string(),
+            ),
+            (
+                "assistant".to_string(),
+                "增长那块你打算讲哪几个指标？".to_string(),
+            ),
+            (
+                "user".to_string(),
+                "DAU 和留存吧。对了以后开会都别给我排早上九点，我起不来".to_string(),
+            ),
         ];
         let n = extract_and_store(&cfg, &turns).await.expect("抽取失败");
         let got = memory::all();
@@ -1435,7 +1585,10 @@ mod tests {
         remember_beat(&quiet);
         assert!(diary(10).is_empty(), "小事不写日记");
 
-        let big = Beat { importance: 85, ..quiet };
+        let big = Beat {
+            importance: 85,
+            ..quiet
+        };
         remember_beat(&big);
         assert_eq!(diary(10).len(), 1, "重要的事要留下来");
 

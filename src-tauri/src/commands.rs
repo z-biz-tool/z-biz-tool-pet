@@ -293,11 +293,15 @@ mod tests {
         };
         let v = serde_json::to_value(&b).unwrap();
         // 每个 snake_case 原名都不该出现
-        for raw in ["area_x", "area_y", "area_w", "area_h", "win_x", "win_y", "win_w", "win_h"] {
+        for raw in [
+            "area_x", "area_y", "area_w", "area_h", "win_x", "win_y", "win_w", "win_h",
+        ] {
             assert!(v.get(raw).is_none(), "字段名 {raw} 泄漏到了前端");
         }
         // 前端读的每一个键都必须在
-        for key in ["areaX", "areaY", "areaW", "areaH", "winX", "winY", "winW", "winH"] {
+        for key in [
+            "areaX", "areaY", "areaW", "areaH", "winX", "winY", "winW", "winH",
+        ] {
             assert!(v.get(key).is_some(), "缺少前端契约字段 {key}");
         }
         // 副屏负偏移不能被当成 0 或 None 丢掉

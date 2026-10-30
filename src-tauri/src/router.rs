@@ -736,8 +736,16 @@ mod tests {
 
         let mut req = ai::ChatRequest {
             messages: vec![
-                ai::Message { role: "system".into(), content: "你是桃夭。".into(), images: None },
-                ai::Message { role: "user".into(), content: "老板今天开会吗".into(), images: None },
+                ai::Message {
+                    role: "system".into(),
+                    content: "你是桃夭。".into(),
+                    images: None,
+                },
+                ai::Message {
+                    role: "user".into(),
+                    content: "老板今天开会吗".into(),
+                    images: None,
+                },
             ],
             model: String::new(),
             stream: None,
@@ -751,14 +759,21 @@ mod tests {
             .find(|m| m.role == "system")
             .map(|m| m.content.clone())
             .unwrap_or_default();
-        assert!(sys.starts_with("你是桃夭。"), "人格必须在前，记忆是补充材料");
+        assert!(
+            sys.starts_with("你是桃夭。"),
+            "人格必须在前，记忆是补充材料"
+        );
         assert!(sys.contains("你记得的关于他的事"), "记忆块没拼进去: {sys}");
         assert!(sys.contains("叫他老板"), "命中的记忆内容丢了: {sys}");
 
         // 同一个请求被重放时不能叠两遍
         inject_memory(&mut req);
         let sys2 = &req.messages[0].content;
-        assert_eq!(sys2.matches("你记得的关于他的事").count(), 1, "重复注入了: {sys2}");
+        assert_eq!(
+            sys2.matches("你记得的关于他的事").count(),
+            1,
+            "重复注入了: {sys2}"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
         std::env::remove_var("ZBOT_DATA_DIR");
