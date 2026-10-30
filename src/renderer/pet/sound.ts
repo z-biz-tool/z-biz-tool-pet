@@ -35,11 +35,13 @@ function ensure(): AudioContext | null {
 
 /**
  * 在用户手势里调一次，把 AudioContext 从 suspended 拉起来。
- * 不在手势里调也没关系 —— 失败静默，下次手势再试。
+ * 不在手势里调也没关系 —— 失败只记日志，下次手势再试。
  */
 export function resumeUnlock(): void {
   const c = ensure();
-  if (c && c.state === 'suspended') void c.resume().catch(() => {});
+  if (c && c.state === 'suspended') {
+    void c.resume().catch((e) => console.warn('[Pet] 音频解锁失败:', e));
+  }
 }
 
 export function setMuted(next: boolean): void {
