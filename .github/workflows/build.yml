@@ -1,8 +1,11 @@
 name: Build & Release
 
-# 打 tag（v*）出包并建 GitHub Release —— update.rs 查的就是本仓的 Releases，
+# 打 tag（v*）出包并建 GitHub Release + 推 latest.json（家族统一更新通道）。
+# update.rs（手搓）与 tauri-plugin-updater（官方）都查本仓的 Releases，
 # 所以这里必须真的建 Release，只传 Actions artifact 的话客户端永远查不到新版本。
+#
 # 只有 windows 腿：截图是 Win32 GDI 直调，macOS 还没有对应实现。
+# ⇒ pet 的 latest.json 里也就只有 windows-x86_64 一个平台，这是对的，不是漏了。
 on:
   push:
     tags:
@@ -13,13 +16,18 @@ permissions:
   contents: write
 
 jobs:
+  # latest-json 作业据此决定要不要推 manifest（缺签名密钥时整条更新通道静默降级）
   build:
     runs-on: windows-latest
+    outputs:
+      signing-mode: ${{ steps.signing.outputs.mode }}
     steps:
       - uses: actions/checkout@v4
 
       # cap-hub 走 ../../z-biz-tool-capability path 依赖：runner 上只有本仓，
       # 先把公共能力仓取到 workspace 内，再链接成 src-tauri 的同级目录。
+      # ⚠️ capability 仓自己没推，这里就取不到新 crate ⇒ 全家 CI 一起红。
+      # 改完 capability 必须先 push 它，再打 tag（2026-10-30 实测踩到）。
       - name: Checkout capability (path deps)
         uses: actions/checkout@v4
         with:
@@ -44,21 +52,200 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      # 同 CI：GitHub 新 token 会写坏 dtolnay 生成的 cargo config
+      # GitHub 新 token（2026-08）会写坏 dtolnay 生成的 cargo config，
+      # 后续 cargo 会报 "Unexpected character at row 2, col 24"。删掉让 cargo 重新生成。
       - name: Reset broken cargo config
         shell: bash
-        run: rm -f "$USERPROFILE/.cargo/config.toml"
+        run: rm -f "$HOME/.cargo/config.toml" "$USERPROFILE/.cargo/config.toml"
 
+      # 不钉 registry：走 npm 默认源（硬编码镜像经模板分发会固化进 public 仓）。
       - name: Install npm dependencies
         run: npm install
+
+      # 自动更新签名（详见 z-biz-tool-lead/doc/分发/updater-官方化指南.md）：
+      # tauri.conf.json 里 createUpdaterArtifacts=true + 非空 pubkey 时，tauri build 在
+      # 没有 TAURI_SIGNING_PRIVATE_KEY 的情况下会**直接报错**（"A public key has been
+      # found, but no private key"）。这里 fail-soft：缺 secret 就加 --no-sign 跳过签名，
+      # 保证手工触发/密钥未就绪时的发布构建不挂。
+      - name: Check updater signing secret (fail-soft)
+        id: signing
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "mode=signed" >> "$GITHUB_OUTPUT"
+            echo "extra-args=" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::未配置 TAURI_SIGNING_PRIVATE_KEY：本次发布跳过更新包签名（--no-sign），不生成 latest.json。配置方法见 doc/分发/updater-官方化指南.md"
+            echo "mode=unsigned" >> "$GITHUB_OUTPUT"
+            echo "extra-args=--no-sign" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ steps.signing.outputs.mode == 'signed' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ steps.signing.outputs.mode == 'signed' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: '${{ github.ref_name }}'
+          # notes 不写默认串：由 latest-json 作业从 CHANGELOG.md 取本版本段落，
+          # 否则更新弹窗里显示的就是 See the assets below…（家族已记账的坑）
           releaseBody: 'See the assets below to download this version.'
           releaseDraft: false
           prerelease: false
+          args: ${{ steps.signing.outputs.extra-args }}
+          # ⚠️ 参数名必须写 includeUpdaterJson —— 写成 uploadUpdaterJson 会被 tauri-action
+          # 当未知输入**静默忽略**（只报一条 warning），latest.json 由 latest-json 作业统一生成。
+          includeUpdaterJson: false
+
+      # 本平台的 latest.json 条目（url 指向 release 资产，signature 是 .sig 文件内容）。
+      # v2 模式（createUpdaterArtifacts: true）的 Windows 更新包是 *.msi，旁边应有同名 .sig。
+      - name: Generate updater manifest fragment
+        if: steps.signing.outputs.mode == 'signed'
+        shell: bash
+        # gh api 回查 release 资产真名需要 token（Actions 里 gh 不会自动带上 GITHUB_TOKEN）
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          PLATFORM="windows-x86_64"
+          BUNDLE_DIR="src-tauri/target/release/bundle/msi"
+          mkdir -p updater-fragments
+          ASSET=$(ls "$BUNDLE_DIR"/*.msi | head -1)
+          SIG="$ASSET.sig"
+          if [ ! -f "$SIG" ]; then
+            echo "::error::缺少签名文件 $SIG —— 签名应在 Build 步骤随 TAURI_SIGNING_PRIVATE_KEY 一起生成"
+            exit 1
+          fi
+          LOCAL_NAME=$(basename "$ASSET")
+          EXT=".${LOCAL_NAME#*.}"
+          REPO="${{ github.repository }}"
+          TAG="${{ github.ref_name }}"
+          # 回查本 tag 的 release 资产（远端资产名可能与本地不同），再用远端 .sig
+          # 与本地 .sig 逐字节比对，确认挑的确实是同一个包。
+          gh api "repos/$REPO/releases/tags/$TAG" --jq '.assets[] | [.id, .name] | @tsv' > /tmp/assets.tsv
+          MATCHES=$(awk -F'\t' -v ext="$EXT" 'index($2, ext) == length($2) - length(ext) + 1 { print }' /tmp/assets.tsv)
+          COUNT=$(printf '%s\n' "$MATCHES" | awk 'NF' | wc -l | tr -d ' ')
+          if [ "$COUNT" != "1" ]; then
+            echo "::error::在 release $TAG 里按「$EXT」匹配到 $COUNT 个资产（应为 1）："
+            printf '%s\n' "$MATCHES"
+            cut -f2 /tmp/assets.tsv
+            exit 1
+          fi
+          NAME=$(printf '%s\n' "$MATCHES" | cut -f2)
+          SIG_ID=$(awk -F'\t' -v n="$NAME.sig" '$2 == n { print $1 }' /tmp/assets.tsv)
+          if [ -z "$SIG_ID" ]; then
+            echo "::error::release 里找不到 $NAME.sig"
+            exit 1
+          fi
+          gh api "repos/$REPO/releases/assets/$SIG_ID" -H "Accept: application/octet-stream" > /tmp/remote.sig
+          if ! diff -q /tmp/remote.sig "$SIG" > /dev/null; then
+            echo "::error::远端 $NAME.sig 与本地签名不一致 —— 挑错资产了，或者签的不是同一个包"
+            exit 1
+          fi
+          URL="https://github.com/$REPO/releases/download/$TAG/$NAME"
+          node -e '
+            const fs = require("fs");
+            const [platform, url, sigPath] = process.argv.slice(1);
+            const fragment = { [platform]: { url, signature: fs.readFileSync(sigPath, "utf8").trim() } };
+            fs.writeFileSync(`updater-fragments/${platform}.json`, JSON.stringify(fragment, null, 2) + "\n");
+          ' "$PLATFORM" "$URL" "$SIG"
+
+      # ⚠️ artifact 名必须是字面量：写成 `updater-frag-*` 想「一个平台一个 artifact」
+      # 会被 upload-artifact 直接拒绝 —— `*` 在非法字符表里（mind v0.2.0 实测）。
+      - name: Upload updater manifest fragment
+        if: steps.signing.outputs.mode == 'signed'
+        uses: actions/upload-artifact@v4
+        with:
+          name: updater-fragments
+          path: updater-fragments/*.json
+          if-no-files-found: error
+
+  # 把片段合并成 latest.json 推到 main（固定分支）。
+  # endpoint 见 tauri.conf.json：https://raw.githubusercontent.com/z-biz-tool/z-biz-tool-pet/main/latest.json
+  # 回滚 = 把 main 上的 latest.json 改回上一版（详见指南「版本号纪律与回滚」）。
+  latest-json:
+    name: Publish latest.json
+    needs: build
+    if: needs.build.outputs.signing-mode == 'signed'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Download platform fragments
+        uses: actions/download-artifact@v4
+        with:
+          name: updater-fragments
+          path: updater-fragments
+
+      - name: Compose latest.json and push to main
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
+
+          # pubkey 还是占位符 ⇒ 客户端验不过签名，推了也是坏更新，直接跳过并警告
+          PUBKEY=$(node -p "require('./src-tauri/tauri.conf.json').plugins.updater.pubkey")
+          if [ "$PUBKEY" = "<TAURI_UPDATER_PUBKEY>" ]; then
+            echo "::warning::pubkey 仍是占位符 <TAURI_UPDATER_PUBKEY>，跳过 latest.json 推送。请先按指南填入 CEO 生成的公钥。"
+            exit 0
+          fi
+
+          # notes 优先取 CHANGELOG.md 的本版本段落；取不到才回落到 Release body
+          # （后者默认是 "See the assets below…"，对更新弹窗没有信息量）。
+          NOTES=$(node -e '
+            const fs = require("fs");
+            const version = process.argv[1];
+            let text = "";
+            try { text = fs.readFileSync("CHANGELOG.md", "utf8"); } catch { process.exit(1); }
+            // 抓「## [x.y.z]」或「## x.y.z」到下一个 ## 之间
+            const re = new RegExp("##\\s*\\[?" + version.replace(/\./g, "\\.") + "\\]?[^\\n]*\\n([\\s\\S]*?)(?=\\n##\\s|$)");
+            const m = text.match(re);
+            if (!m) process.exit(1);
+            const body = m[1].trim();
+            if (!body) process.exit(1);
+            process.stdout.write(body);
+          ' "$VERSION" || gh release view "$TAG" --json body -q .body 2>/dev/null || echo "Release $TAG")
+
+          node -e '
+            const fs = require("fs");
+            const [version, notes] = process.argv.slice(1);
+            const dir = "updater-fragments";
+            const platforms = {};
+            for (const f of fs.readdirSync(dir).filter((f) => f.endsWith(".json"))) {
+              Object.assign(platforms, JSON.parse(fs.readFileSync(`${dir}/${f}`, "utf8")));
+            }
+            if (Object.keys(platforms).length === 0) {
+              console.error("没有收集到任何平台片段，拒绝推空 latest.json");
+              process.exit(1);
+            }
+            fs.writeFileSync("latest.json", JSON.stringify({
+              version,
+              notes,
+              pub_date: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
+              platforms,
+            }, null, 2) + "\n");
+            console.log("latest.json 平台:", Object.keys(platforms).join(", "));
+          ' "$VERSION" "$NOTES"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add latest.json
+          if git diff --cached --quiet; then
+            echo "latest.json 无变化，跳过提交"
+            exit 0
+          fi
+          git commit -m "chore(release): 更新 latest.json 到 v$VERSION [skip ci]"
+          git push origin HEAD:main

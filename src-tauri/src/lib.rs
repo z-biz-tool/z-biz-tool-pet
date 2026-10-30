@@ -56,6 +56,12 @@ pub fn run() {
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         // 开机自启：Electron 的 app.setLoginItemSettings 在 Tauri 侧的对应物
         .plugin(tauri_plugin_autostart::init(Default::default(), None))
+        // 家族统一更新通道（2026-10-30 接入）：endpoint 与 pubkey 见 tauri.conf.json，
+        // latest.json 由 build.yml 在打 tag 时生成并推到 main。手搓 update.rs 仍保留，
+        // 但它默认不工作（需显式配 feed），两者不冲突。
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        // 更新安装完成后的「立即重启」
+        .plugin(tauri_plugin_process::init())
         .manage(zbiz_pending.clone())
         .invoke_handler(tauri::generate_handler![
             commands::app_get_mode,

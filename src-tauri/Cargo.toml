@@ -1,6 +1,6 @@
 [package]
 name = "z-biz-tool-pet"
-version = "1.4.1"
+version = "1.5.0"
 description = "桌面萌宠应用 - 支持语音对话的 AI 助手"
 edition = "2021"
 license = "MIT"
@@ -43,6 +43,12 @@ tauri-plugin-global-shortcut = "2"
 # 开机自启：Electron 的 app.setLoginItemSettings 在 Tauri 侧的对应物
 tauri-plugin-autostart = "2"
 tauri-plugin-single-instance = "2"
+# 家族统一更新通道：endpoint 指本仓 raw main/latest.json，由 build.yml 在发版时生成并推送。
+# 与手搓的 update.rs 并存但互不打架 —— update.rs 必须显式配 ZBOT_UPDATE_FEED_URL
+# 或 ~/.z-bot/update-feed.json 才会查（默认 no-feed 直接跳过），所以默认只有本插件生效。
+tauri-plugin-updater = "2"
+# 更新完成后的一键重启
+tauri-plugin-process = "2"
 # 截图隐身（SetWindowDisplayAffinity）与鼠标推送（GetCursorPos）只能直调 Win32；
 # 本仓库是组织里第一个用 windows crate 的产品。版本跟 tauri 2.12 对齐（0.62），
 # 否则 win.hwnd() 返回的 HWND 与本地 HWND 是两个不同类型，得手工转指针。

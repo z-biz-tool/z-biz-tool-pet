@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "z-biz-tool-pet",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "identifier": "com.zifang.z-biz-tool-pet",
   "build": {
     "frontendDist": "../dist/renderer",
@@ -50,6 +50,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -57,5 +58,14 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://raw.githubusercontent.com/z-biz-tool/z-biz-tool-pet/main/latest.json"
+      ],
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEY5MjA2OThBNzlDN0IyNkUKUldSdXNzZDVpbWtnK2MvNSthMmJ5MU1nTmY5U2IrNFUzMURxdjBTQlpUNElwVGRJSHZDTG1FNFMK",
+      "//": "家族统一签名公钥（与 db/file/sys/note/mind/remote 同一把）。私钥存 GitHub Secrets TAURI_SIGNING_PRIVATE_KEY + TAURI_SIGNING_PRIVATE_KEY_PASSWORD。流程见 z-biz-tool-lead/doc/分发/updater-官方化指南.md。"
+    }
   }
 }

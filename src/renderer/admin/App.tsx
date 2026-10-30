@@ -37,6 +37,7 @@ import QuickCommandPanel from './QuickCommandPanel';
 import AchievementPanel from './AchievementPanel';
 import SceneryPanel from './SceneryPanel';
 import MemoryPanel from './MemoryPanel';
+import UpdaterGate from './UpdaterDialog';
 import { DEFAULT_CONFIG, SUGGESTED_QUESTIONS } from '../shared/prompts';
 import { errorMessage } from '../shared/interaction';
 import { characterOf } from '../pet/characters';
@@ -1176,6 +1177,10 @@ function App() {
           <SceneryPanel open={sceneryOpen} onClose={() => setSceneryOpen(false)} />
           <MemoryPanel open={memoryOpen} onClose={() => setMemoryOpen(false)} />
         </Modal>
+
+        {/* 自动更新闸门：启动 5 秒后静默查一次，有新版才弹窗。
+            必须在 ConfigProvider 内，才能吃到本仓的暗色主题 token。 */}
+        <UpdaterGate />
       </div>
     </ConfigProvider>
   );
