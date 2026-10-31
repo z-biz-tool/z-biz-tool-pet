@@ -1,0 +1,16 @@
+{
+  "id": "pet",
+  "displayName": "桌面宠物 + 实时会议转写",
+  "description": "桌面宠物 + 实时会议转写",
+  "acceptsDeepLink": true,
+  "actions": [
+    "open",
+    "say"
+  ],
+  "keywords": [
+    "宠物",
+    "桌面宠物",
+    "转写",
+    "会议"
+  ]
+}
