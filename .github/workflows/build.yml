@@ -50,7 +50,7 @@ jobs:
           cache: npm
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.99.0
 
       # GitHub 新 token（2026-08）会写坏 dtolnay 生成的 cargo config，
       # 后续 cargo 会报 "Unexpected character at row 2, col 24"。删掉让 cargo 重新生成。

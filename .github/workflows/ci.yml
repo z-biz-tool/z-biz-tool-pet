@@ -79,7 +79,7 @@ jobs:
           node-version: '22'
           cache: 'npm'
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.0
         with:
           components: clippy, rustfmt
 
@@ -180,7 +180,7 @@ jobs:
           node-version: '22'
           cache: 'npm'
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@1.99.0
 
       # GitHub 新 token 会写坏 dtolnay 生成的 cargo config（2026-10-03 收编进模板）
       - name: Reset broken cargo config
