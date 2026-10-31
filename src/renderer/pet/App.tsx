@@ -1,4 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { message } from 'antd';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
+import { startDeepLinkReceiver, ZBIZ_TAKE_PENDING, type Handoff } from 'z-biz-tool-shared/protocol';
+import { resolvePetDeepLink } from './_shared/deepLink';
 import {
   AnimationType,
   ANIMATION_KEYFRAMES,
@@ -258,6 +263,8 @@ function App() {
   const companionRef = useRef<CompanionEngine | null>(null);
   const autonomyRef = useRef<AutonomyDirector | null>(null);
   const sayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 深链接不住时的可见提示（不静默吞掉 = 用户看到「点了没反应」）
+  const [msgApi, msgContext] = message.useMessage();
   const petScaleRef = useRef(petScale);
   petScaleRef.current = petScale;
   const cursorDeltaRef = useRef({ dx: 0, dy: 0 });
@@ -1218,6 +1225,36 @@ function App() {
     }, ms);
   }, []);
 
+  // zbiz:// 深链接收侧：**机制**在共享层 `startDeepLinkReceiver`（冷启动补取、事件监听、不静默吞掉），
+  // 本仓只通过 translate 注入**语义**（让宠物说某句话），并在 onEffect 里落地到 handleCompanionSay。
+  // 接在 pet 窗口而非 admin 窗口：pet 窗口常驻且可见，是唯一能真正「让她说出来」的入口；
+  // admin 只是配置面板，没有可见的宠物，把说话语义接在那没有意义。
+  useEffect(() => {
+    const stop = startDeepLinkReceiver({
+      productId: 'pet',
+      invoke: () => invoke<Handoff[]>(ZBIZ_TAKE_PENDING),
+      listen: (event, handler) => listen(event, handler),
+      translate: (item) => {
+        const out = resolvePetDeepLink(item);
+        if (out.problem) {
+          return { ok: false, problem: out.problem };
+        }
+        return { ok: true, effect: { text: out.text } };
+      },
+      onProblem: (msg, item) => {
+        // 未适配的深链静默吞掉 = 用户「点了没反应」，必须给可见提示
+        console.warn('[pet] 未适配的深链', item, msg);
+        msgApi.warning(msg);
+      },
+      onEffect: (effect) => {
+        const text = effect.text as string | null;
+        if (text) handleCompanionSay(text, {});
+      },
+      log: (msg, item) => console.debug('[pet] 深链', msg, item),
+    });
+    return stop;
+  }, [handleCompanionSay, msgApi]);
+
   // ---------- 手势分层 ----------
   // 单击 = 摸头（可连击）、长按 = 说话、拖拽 = 挣扎着被搬走、滚轮 = 缩放立绘。
   // 原来的单击直接开麦，等于把最重的功能挂在最容易被误触的手势上。
@@ -1671,6 +1708,8 @@ function App() {
       onMouseEnter={() => setShowHUD(true)}
       onMouseLeave={() => setShowHUD(false)}
     >
+      {/* 深链接未适配时的可见提示载体（antd message 上下文） */}
+      {msgContext}
       {/* 场景氛围光（管理端的场景配色落在这里）+ 角色自己的轮廓光 */}
       <div className="aura ambient" />
       <div className="aura" />
