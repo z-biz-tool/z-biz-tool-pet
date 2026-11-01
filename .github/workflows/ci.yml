@@ -104,6 +104,13 @@ jobs:
       - name: Typecheck (renderer)
         run: npm run typecheck
 
+      # 2026-11-01 新增：前端 tests/*.test.ts（106 条断言，秒级）此前从来没进过 CI
+      # —— package.json 里有 test 脚本，但这条流水线一个断言都没跑，
+      # 改红逻辑 CI 不会知道（与 worker 前端测试同一个坑）。
+      # --experimental-strip-types 直接跑 .ts，不需要构建步骤；Node 22 支持。
+      - name: Unit tests (renderer)
+        run: npm test
+
       # 只把 error 作为硬门禁，react-hooks/exhaustive-deps 等 warning 暂不阻断
       - name: Lint
         run: npm run lint
