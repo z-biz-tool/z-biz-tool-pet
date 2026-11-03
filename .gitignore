@@ -48,3 +48,8 @@ src-tauri/gen/
 # 语音引擎构建产物与模型（录音临时文件在 ~/.z-bot/meetings，不在仓库里）
 whisper.cpp/*
 !whisper.cpp/README.md
+
+# ---- 构建产物治理（2026-11-03）----
+# 编译/打包产物一律不入库：可再生、体积大、多仓重复。
+# Rust target / 前端 node_modules / Python 缓存。
+target/
